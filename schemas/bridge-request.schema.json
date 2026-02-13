@@ -32,21 +32,6 @@
       "minLength": 1,
       "description": "Base URL for ONI-side HTTP API, for example http://127.0.0.1:8766."
     },
-    "state_endpoint": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Optional explicit state endpoint URL."
-    },
-    "actions_endpoint": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Optional explicit actions endpoint URL."
-    },
-    "health_endpoint": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Optional explicit health endpoint URL."
-    },
     "screenshot_path": {
       "type": "string",
       "minLength": 1,

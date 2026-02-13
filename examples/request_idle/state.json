@@ -2,9 +2,6 @@
   "request_id": "example_idle_001",
   "request_dir": ".",
   "api_base_url": "http://127.0.0.1:8766",
-  "state_endpoint": "http://127.0.0.1:8766/state",
-  "actions_endpoint": "http://127.0.0.1:8766/actions",
-  "health_endpoint": "http://127.0.0.1:8766/health",
   "screenshot_path": "screenshot.png",
   "requested_at_utc": "2026-02-13T23:15:00Z",
   "context": {

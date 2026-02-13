@@ -35,9 +35,6 @@ def test_normalize_action_invalid_input_defaults_to_noop() -> None:
 def test_build_prompt_mentions_screenshot_flag() -> None:
     payload = {
         "api_base_url": "http://127.0.0.1:8766",
-        "state_endpoint": "http://127.0.0.1:8766/state",
-        "actions_endpoint": "http://127.0.0.1:8766/actions",
-        "health_endpoint": "http://127.0.0.1:8766/health",
     }
 
     prompt_with_image = build_prompt(payload, True)
@@ -46,10 +43,12 @@ def test_build_prompt_mentions_screenshot_flag() -> None:
     assert "screenshot.png is available." in prompt_with_image
     assert "screenshot.png is not available." in prompt_without_image
     assert "bridge-response.schema.json" in prompt_with_image
-    assert "state=http://127.0.0.1:8766/state" in prompt_with_image
+    assert "api_base_url=http://127.0.0.1:8766" in prompt_with_image
     assert "set_duplicant_priority" in prompt_with_image
     assert "Do not run broad exploratory shell scans" in prompt_with_image
-
+    assert "you may submit immediate actions via POST to /actions" in prompt_with_image
+    assert "wiki.gg/Oxygen_Not_Included" in prompt_with_image
+    assert "oxygennotincluded.wiki.gg" in prompt_with_image
 
 def test_call_codex_exec_uses_stubbed_command(tmp_path: Path) -> None:
     request_dir = tmp_path / "request"
@@ -84,6 +83,7 @@ def test_call_codex_exec_uses_stubbed_command(tmp_path: Path) -> None:
     assert (request_dir / "logs" / "codex_stdout.txt").exists()
     assert (request_dir / "bridge-request.schema.json").exists()
     assert (request_dir / "bridge-response.schema.json").exists()
+    assert (request_dir / "openapi.yaml").exists()
     assert (request_dir / "state.example.json").exists()
     assert (request_dir / "response.example.json").exists()
 

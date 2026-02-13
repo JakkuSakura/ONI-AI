@@ -131,6 +131,8 @@ ONI-side HTTP endpoints:
 - `GET /actions` -> currently queued HTTP actions
 - `POST /actions` -> enqueue actions (`{"actions":[...]}`), applied on game main thread
 
+Codex endpoint discovery is driven by staged OpenAPI spec: `openapi.yaml`.
+
 Screenshot files are saved in the installed mod folder under `captures/`.
 
 ## License
@@ -182,7 +184,7 @@ The test writes raw and extracted responses under a temp request directory:
 cd ~/Dev/ONI-AI
 mkdir -p /tmp/oni-test
 cat >/tmp/oni-test/state.json <<'JSON'
-{"request_id":"manual_test","request_dir":"/tmp/oni-test","api_base_url":"http://127.0.0.1:8766","state_endpoint":"http://127.0.0.1:8766/state","actions_endpoint":"http://127.0.0.1:8766/actions","health_endpoint":"http://127.0.0.1:8766/health","screenshot_path":"screenshot.png","requested_at_utc":"2026-02-13T00:00:00Z","context":{"cycle":1,"time_since_cycle_start":10.0,"time_in_cycles":1.0,"paused":true,"current_speed":1,"previous_speed":1,"real_time_since_startup_seconds":10.0,"unscaled_time_seconds":10.0},"duplicants":[],"pending_actions":[],"priorities":[]}
+{"request_id":"manual_test","request_dir":"/tmp/oni-test","api_base_url":"http://127.0.0.1:8766","screenshot_path":"screenshot.png","requested_at_utc":"2026-02-13T00:00:00Z","context":{"cycle":1,"time_since_cycle_start":10.0,"time_in_cycles":1.0,"paused":true,"current_speed":1,"previous_speed":1,"real_time_since_startup_seconds":10.0,"unscaled_time_seconds":10.0},"duplicants":[],"pending_actions":[],"priorities":[]}
 JSON
 cat >/tmp/fake-codex <<'SCRIPT'
 #!/usr/bin/env bash

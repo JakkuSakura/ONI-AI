@@ -173,15 +173,8 @@ def normalize_action(raw_output: str, request_tag: str = "-") -> str:
 
 def build_prompt(payload: dict, has_screenshot: bool) -> str:
     api_base_url = str(payload.get("api_base_url", "")).strip()
-    state_endpoint = str(payload.get("state_endpoint", "")).strip()
-    actions_endpoint = str(payload.get("actions_endpoint", "")).strip()
-    health_endpoint = str(payload.get("health_endpoint", "")).strip()
-
     if api_base_url:
-        normalized_api_base = api_base_url.rstrip("/")
-        state_endpoint = state_endpoint or f"{normalized_api_base}/state"
-        actions_endpoint = actions_endpoint or f"{normalized_api_base}/actions"
-        health_endpoint = health_endpoint or f"{normalized_api_base}/health"
+        api_base_url = api_base_url.rstrip("/")
 
     custom_prompt = os.getenv(
         "ONI_AI_PROMPT",
@@ -189,7 +182,7 @@ def build_prompt(payload: dict, has_screenshot: bool) -> str:
             "You are an ONI survival operations planner. "
             "Primary objective: keep duplicants alive (oxygen, food, temperature safety, no idle-critical failures). "
             "Secondary objective: stabilize and improve colony reliability. "
-            "Use local references: ./bridge-request.schema.json and ./bridge-response.schema.json. "
+            "Use local references: ./bridge-request.schema.json, ./bridge-response.schema.json, and ./openapi.yaml. "
             "Read the schema directly to understand all supported actions and required fields. "
             "Before planning, fetch live game state from ONI HTTP APIs. "
             "Output MUST be valid JSON matching bridge-response.schema.json. "
@@ -204,7 +197,9 @@ def build_prompt(payload: dict, has_screenshot: bool) -> str:
             "Always include stable action ids and concrete params. "
             "Do not run broad exploratory shell scans or commands that print huge outputs. "
             "Use concise, targeted file reads only. "
-            "When state context is paused and actions_endpoint is available, you may submit immediate actions via POST to /actions while planning. "
+            "You may query ONI wiki sources for mechanics/building/research facts when needed: wiki.gg/Oxygen_Not_Included, oxygennotincluded.wiki.gg, oni-db.com, and klei.com forums. "
+            "Use targeted lookups only; avoid broad web crawling. "
+            "When state context is paused and api_base_url is available, you may submit immediate actions via POST to /actions while planning. "
             "If you do live POST, keep it minimal, survival-focused, and still return final JSON plan. "
             "Return ONLY JSON with top-level keys in this order: analysis, suggestions, actions, notes. "
             "analysis should summarize colony risk and why the plan helps survival. "
@@ -213,17 +208,15 @@ def build_prompt(payload: dict, has_screenshot: bool) -> str:
     )
 
     api_note = ""
-    if state_endpoint:
+    if api_base_url:
         api_note = (
-            "API endpoints: "
-            f"state={state_endpoint}; "
-            f"actions={actions_endpoint or 'N/A'}; "
-            f"health={health_endpoint or 'N/A'}. "
-            "Use GET state endpoint as primary source of truth."
+            f"ONI API api_base_url={api_base_url}; "
+            "read endpoint paths from ./openapi.yaml. "
+            "Use GET /state as primary source of truth and POST /actions for live action submission when paused."
         )
     else:
         api_note = (
-            "No API endpoint info provided in this request payload. "
+            "No api_base_url provided in this request payload. "
             "Use request payload fields as fallback state input."
         )
 
@@ -276,6 +269,7 @@ def copy_reference_assets_to_request_dir(request_dir: str, request_tag: str) -> 
     source_to_target = {
         project_root / "schemas" / "bridge-request.schema.json": Path(request_dir) / "bridge-request.schema.json",
         project_root / "schemas" / "bridge-response.schema.json": Path(request_dir) / "bridge-response.schema.json",
+        project_root / "schemas" / "openapi.yaml": Path(request_dir) / "openapi.yaml",
         project_root / "examples" / "request_idle" / "state.json": Path(request_dir) / "state.example.json",
         project_root / "examples" / "request_idle" / "response.json": Path(request_dir) / "response.example.json",
     }

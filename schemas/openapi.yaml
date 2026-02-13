@@ -1,0 +1,48 @@
+openapi: 3.0.3
+info:
+  title: ONI AI Local API
+  version: 1.0.0
+  description: Local ONI-side API exposed by the C# mod for live state and action queue access.
+servers:
+  - url: /
+paths:
+  /health:
+    get:
+      summary: Health and busy status
+      responses:
+        '200':
+          description: OK
+  /state:
+    get:
+      summary: Latest captured game state
+      responses:
+        '200':
+          description: State snapshot
+        '404':
+          description: No snapshot available yet
+  /actions:
+    get:
+      summary: Current queued actions
+      responses:
+        '200':
+          description: Queued actions
+    post:
+      summary: Enqueue actions for ONI main thread execution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actions]
+              properties:
+                actions:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+      responses:
+        '200':
+          description: Accepted action count
+        '400':
+          description: Invalid payload
