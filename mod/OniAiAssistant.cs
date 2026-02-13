@@ -1389,12 +1389,7 @@ namespace OniAiAssistant
                 throw new InvalidOperationException("Target duplicant parameters missing");
             }
 
-            string targetId = (parameters.Value<string>("duplicant_id") ?? string.Empty).Trim();
-            string targetName = (parameters.Value<string>("duplicant_name") ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(targetId) && string.IsNullOrWhiteSpace(targetName))
-            {
-                throw new InvalidOperationException("Target duplicant requires duplicant_id or duplicant_name");
-            }
+            string targetId = RequireNonEmptyString(parameters, "duplicant_id", "Target duplicant requires non-empty duplicant_id");
 
             MonoBehaviour[] behaviours = FindObjectsOfType<MonoBehaviour>();
             foreach (MonoBehaviour behaviour in behaviours)
@@ -1410,12 +1405,9 @@ namespace OniAiAssistant
                 }
 
                 string candidateId = behaviour.gameObject.GetInstanceID().ToString(CultureInfo.InvariantCulture);
-                string candidateName = ResolveDuplicantName(behaviour);
-
                 bool idMatch = !string.IsNullOrWhiteSpace(targetId) && string.Equals(candidateId, targetId, StringComparison.OrdinalIgnoreCase);
-                bool nameMatch = !string.IsNullOrWhiteSpace(targetName) && string.Equals(candidateName, targetName, StringComparison.OrdinalIgnoreCase);
 
-                if (idMatch || nameMatch)
+                if (idMatch)
                 {
                     return behaviour;
                 }
@@ -1429,7 +1421,7 @@ namespace OniAiAssistant
             List<int> cells = ResolveCellsFromParameters(parameters);
             if (cells.Count == 0)
             {
-                throw new InvalidOperationException("dig requires params.cells or params.cell");
+                throw new InvalidOperationException("dig requires params.cells");
             }
 
             if (!GetRuntimeToolInstance("DigTool", out object digTool))
@@ -1475,7 +1467,7 @@ namespace OniAiAssistant
             List<int> cells = ResolveCellsFromParameters(parameters);
             if (cells.Count == 0)
             {
-                throw new InvalidOperationException("deconstruct requires params.cells or params.cell");
+                throw new InvalidOperationException("deconstruct requires params.cells");
             }
 
             if (!GetRuntimeToolInstance("DeconstructTool", out object deconstructTool))
@@ -1503,19 +1495,12 @@ namespace OniAiAssistant
 
         private string ApplyBuildAction(JObject parameters)
         {
-            string buildingId = (parameters.Value<string>("building_id")
-                ?? parameters.Value<string>("building")
-                ?? parameters.Value<string>("prefab_id")
-                ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(buildingId))
-            {
-                throw new InvalidOperationException("build requires building id");
-            }
+            string buildingId = RequireNonEmptyString(parameters, "building_id", "build requires non-empty building_id");
 
             List<int> cells = ResolveCellsFromParameters(parameters);
             if (cells.Count == 0)
             {
-                throw new InvalidOperationException("build requires params.cells or params.cell");
+                throw new InvalidOperationException("build requires params.cells");
             }
 
             if (!ResolveBuildingDef(buildingId, out object buildingDef))
@@ -1582,14 +1567,7 @@ namespace OniAiAssistant
 
         private string ApplyResearchAction(JObject parameters)
         {
-            string techId = (parameters.Value<string>("tech_id")
-                ?? parameters.Value<string>("research_id")
-                ?? parameters.Value<string>("id")
-                ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(techId))
-            {
-                throw new InvalidOperationException("research requires tech id");
-            }
+            string techId = RequireNonEmptyString(parameters, "tech_id", "research requires non-empty tech_id");
 
             if (!ResolveTech(techId, out object tech))
             {
@@ -1653,12 +1631,6 @@ namespace OniAiAssistant
                 return result;
             }
 
-            int? directCell = parameters.Value<int?>("cell");
-            if (directCell.HasValue)
-            {
-                result.Add(directCell.Value);
-            }
-
             JArray cells = parameters["cells"] as JArray;
             if (cells != null)
             {
@@ -1667,37 +1639,33 @@ namespace OniAiAssistant
                     if (token.Type == JTokenType.Integer)
                     {
                         result.Add(token.Value<int>());
-                        continue;
-                    }
-
-                    if (token is JObject cellObject)
-                    {
-                        int? x = cellObject.Value<int?>("x");
-                        int? y = cellObject.Value<int?>("y");
-                        int? cell = cellObject.Value<int?>("cell");
-
-                        if (cell.HasValue)
-                        {
-                            result.Add(cell.Value);
-                            continue;
-                        }
-
-                        if (x.HasValue && y.HasValue && ResolveCellFromXY(x.Value, y.Value, out int resolvedCell))
-                        {
-                            result.Add(resolvedCell);
-                        }
                     }
                 }
             }
 
-            int? xSingle = parameters.Value<int?>("x");
-            int? ySingle = parameters.Value<int?>("y");
-            if (xSingle.HasValue && ySingle.HasValue && ResolveCellFromXY(xSingle.Value, ySingle.Value, out int singleCell))
+            return result.Distinct().ToList();
+        }
+
+        private static string RequireNonEmptyString(JObject parameters, string key, string errorMessage)
+        {
+            if (parameters == null)
             {
-                result.Add(singleCell);
+                throw new InvalidOperationException(errorMessage);
             }
 
-            return result.Distinct().ToList();
+            JToken token = parameters[key];
+            if (token == null || token.Type != JTokenType.String)
+            {
+                throw new InvalidOperationException(errorMessage);
+            }
+
+            string value = token.Value<string>().Trim();
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                throw new InvalidOperationException(errorMessage);
+            }
+
+            return value;
         }
 
         private static bool ResolveCellFromXY(int x, int y, out int cell)
