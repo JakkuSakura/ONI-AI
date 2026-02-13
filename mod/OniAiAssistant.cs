@@ -2286,18 +2286,39 @@ namespace OniAiAssistant
                     return;
                 }
 
-                try
+                HandleHttpRequestSafely(context);
+            }
+        }
+
+        private void HandleHttpRequestSafely(HttpListenerContext context)
+        {
+            string method = context?.Request?.HttpMethod ?? "unknown_method";
+            string path = context?.Request?.Url?.AbsolutePath ?? "unknown_path";
+            string requestId = System.DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture)
+                + "_"
+                + Thread.CurrentThread.ManagedThreadId.ToString(CultureInfo.InvariantCulture);
+
+            try
+            {
+                HandleHttpRequest(context);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogError("[ONI-AI] HTTP request failed"
+                    + " request_id=" + requestId
+                    + " method=" + method
+                    + " path=" + path
+                    + " error=" + exception);
+
+                WriteJsonResponse(context.Response, 500, new JObject
                 {
-                    HandleHttpRequest(context);
-                }
-                catch (Exception exception)
-                {
-                    WriteJsonResponse(context.Response, 500, new JObject
-                    {
-                        ["error"] = "internal_error",
-                        ["message"] = exception.Message
-                    });
-                }
+                    ["error"] = "internal_error",
+                    ["request_id"] = requestId,
+                    ["method"] = method,
+                    ["path"] = path,
+                    ["exception_type"] = exception.GetType().FullName,
+                    ["message"] = exception.Message
+                });
             }
         }
 
@@ -2679,6 +2700,7 @@ namespace OniAiAssistant
             }
             catch
             {
+                Debug.LogWarning("[ONI-AI] Failed to write HTTP JSON response status=" + statusCode.ToString(CultureInfo.InvariantCulture));
             }
             finally
             {
