@@ -62,7 +62,7 @@ Optional env vars:
 - `ONI_AI_SCREENSHOT_WAIT_MS` (default: `500`, wait before `codex exec` for screenshot flush)
 - `ONI_AI_SCREENSHOT_POLL_MS` (default: `50`, poll interval while waiting for screenshot)
 
-The bridge writes request data to a temp directory (`request.json`, `context.json`, optional `screenshot.png`), with `request.json` carrying relative snapshot paths plus `available_actions` and duplicant snapshots (`status`, `priority`, `skills`). It stages `schemas/*` and `examples/*` references into that request directory, invokes `codex exec` there, then parses the output into ONI actions.
+The bridge writes request data to a temp directory (`state.json`, optional `screenshot.png`), with `state.json` as the single source of truth including context, duplicants (`status`, `priority`, `skills`), pending actions, priority snapshots, runtime config, assemblies, scenes, and singleton summaries. It stages `schemas/*` and `examples/*` references into that request directory, invokes `codex exec` there, then parses the output into ONI actions.
 
 By default, mod requests are written under system tmp:
 
@@ -160,7 +160,10 @@ The test writes raw and extracted responses under a temp request directory:
 
 ```bash
 cd ~/Dev/ONI-AI
-mkdir -p /tmp/oni-test/snapshot
+mkdir -p /tmp/oni-test
+cat >/tmp/oni-test/state.json <<'JSON'
+{"request_id":"manual_test","request_dir":".","state_path":"state.json","screenshot_path":"screenshot.png","requested_at_utc":"2026-02-13T00:00:00Z","context":{"cycle":1,"time_since_cycle_start":10.0,"time_in_cycles":1.0,"paused":true,"current_speed":1,"previous_speed":1,"real_time_since_startup_seconds":10.0,"unscaled_time_seconds":10.0},"duplicants":[]}
+JSON
 cat >/tmp/fake-codex <<'SCRIPT'
 #!/usr/bin/env bash
 echo '{"actions":[{"id":"t1","type":"set_speed","params":{"speed":2}}]}'

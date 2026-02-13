@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from oni_ai_bridge.ai_bridge import call_codex_exec
+from oni_ai.ai_bridge import call_codex_exec
 
 
 REAL_CODEX_ENV_FLAG = "ONI_AI_RUN_REAL_CODEX"
@@ -50,10 +50,29 @@ def test_call_codex_exec_with_realistic_payload_and_real_codex() -> None:
     request_envelope = {
         "request_id": request_id,
         "request_dir": str(request_dir),
-        "snapshot_dir": str(snapshot_dir),
+        "state_path": "state.json",
         "screenshot_path": str(screenshot_path),
         "requested_at_utc": datetime.now(tz=timezone.utc).isoformat(),
         "context": context,
+        "pending_actions": [
+            {
+                "duplicant_id": "1001",
+                "duplicant_name": "Ada",
+                "current_action": "Idle",
+                "queue": [],
+            }
+        ],
+        "priorities": [
+            {
+                "duplicant_id": "1001",
+                "duplicant_name": "Ada",
+                "values": {"dig": 5, "build": 5},
+            }
+        ],
+        "runtime_config": runtime_config,
+        "assemblies": assemblies,
+        "scenes": scenes,
+        "singletons": singletons,
     }
 
     runtime_config = {
@@ -125,12 +144,7 @@ def test_call_codex_exec_with_realistic_payload_and_real_codex() -> None:
         },
     ]
 
-    (request_dir / "request.json").write_text(json.dumps(request_envelope, indent=2), encoding="utf-8")
-    (snapshot_dir / "context.json").write_text(json.dumps(context, indent=2), encoding="utf-8")
-    (snapshot_dir / "runtime_config.json").write_text(json.dumps(runtime_config, indent=2), encoding="utf-8")
-    (snapshot_dir / "assemblies.json").write_text(json.dumps(assemblies, indent=2), encoding="utf-8")
-    (snapshot_dir / "scenes.json").write_text(json.dumps(scenes, indent=2), encoding="utf-8")
-    (snapshot_dir / "singletons.json").write_text(json.dumps(singletons, indent=2), encoding="utf-8")
+    (request_dir / "state.json").write_text(json.dumps(request_envelope, indent=2), encoding="utf-8")
 
     env_backup = {
         "ONI_AI_PROMPT": os.environ.get("ONI_AI_PROMPT"),
@@ -140,7 +154,7 @@ def test_call_codex_exec_with_realistic_payload_and_real_codex() -> None:
     os.environ["ONI_AI_CODEX_CMD"] = "codex"
     os.environ["ONI_AI_CODEX_TIMEOUT_SECONDS"] = "120"
     os.environ["ONI_AI_PROMPT"] = (
-        "You are testing an ONI bridge. Read request.json and files under snapshot/. "
+        "You are testing an ONI bridge. Read state.json. "
         "Return ONLY valid JSON with top-level key actions. "
         "Choose exactly one action: set_speed with params.speed between 1 and 3."
     )

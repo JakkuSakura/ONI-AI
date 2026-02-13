@@ -1,4 +1,10 @@
 {
+  "analysis": "Colony is stable but oxygen margin is moderate and duplicant task allocation is generic; prioritize survivability throughput.",
+  "suggestions": [
+    "Boost dig/build labor on the primary worker to unlock and complete key infrastructure faster.",
+    "Queue safe excavation for nearby resources and place an oxygen support structure in a central corridor.",
+    "Keep simulation at controlled speed until critical errands become stable."
+  ],
   "actions": [
     {
       "id": "speed-main",

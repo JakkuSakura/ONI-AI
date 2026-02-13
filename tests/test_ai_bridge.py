@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 
-from oni_ai_bridge.ai_bridge import build_prompt, call_codex_exec, normalize_action, strip_fence
+from oni_ai.ai_bridge import build_prompt, call_codex_exec, normalize_action, strip_fence
 
 
 def test_strip_fence_json_block() -> None:
@@ -39,10 +39,8 @@ def test_build_prompt_mentions_screenshot_flag() -> None:
     assert "screenshot.png is available." in prompt_with_image
     assert "screenshot.png is not available." in prompt_without_image
     assert "bridge-response.schema.json" in prompt_with_image
-    assert "bridge-response.example.json" in prompt_with_image
-    assert "pause, resume" in prompt_with_image
     assert "set_duplicant_priority" in prompt_with_image
-    assert "available_actions and duplicants" in prompt_with_image
+    assert "Read state.json (single source of truth for colony state)" in prompt_with_image
 
 
 def test_call_codex_exec_uses_stubbed_command(tmp_path: Path) -> None:

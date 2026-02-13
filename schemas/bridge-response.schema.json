@@ -7,6 +7,15 @@
   "additionalProperties": true,
   "required": ["actions"],
   "properties": {
+    "analysis": {
+      "type": "string"
+    },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "actions": {
       "type": "array",
       "items": {

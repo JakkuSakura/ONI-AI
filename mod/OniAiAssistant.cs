@@ -53,24 +53,6 @@ namespace OniAiAssistant
     {
         private const string ButtonIdleText = "ONI AI Request";
         private const string ButtonBusyText = "AI Working...";
-        private static readonly string[] AvailableActionTypes =
-        {
-            "set_speed",
-            "no_op",
-            "build",
-            "dig",
-            "deconstruct",
-            "priority",
-            "arrangement",
-            "research",
-            "pause",
-            "resume",
-            "cancel",
-            "set_duplicant_status",
-            "set_duplicant_priority",
-            "set_duplicant_skills"
-        };
-
         private static OniAiController instance;
 
         private OniAiConfig config;
@@ -639,46 +621,44 @@ namespace OniAiAssistant
             string requestId = timestamp + "_" + UnityEngine.Random.Range(1000, 9999).ToString(CultureInfo.InvariantCulture);
             string requestRoot = GetRequestRootDirectory();
             string requestDir = Path.Combine(requestRoot, requestId);
-            string snapshotDir = Path.Combine(requestDir, "snapshot");
             string logsDir = Path.Combine(requestDir, "logs");
 
-            Directory.CreateDirectory(snapshotDir);
+            Directory.CreateDirectory(requestDir);
             Directory.CreateDirectory(logsDir);
 
-            string screenshotPath = Path.Combine(snapshotDir, "screenshot.png");
+            string screenshotPath = Path.Combine(requestDir, "screenshot.png");
             ScreenCapture.CaptureScreenshot(screenshotPath);
 
-            string snapshotRelativePath = "snapshot";
-            string screenshotRelativePath = "snapshot/screenshot.png";
+            string screenshotRelativePath = "screenshot.png";
 
             var context = BuildContextObject(previousSpeed);
-            var requestEnvelope = new JObject
+            var state = new JObject
             {
                 ["request_id"] = requestId,
                 ["request_dir"] = ".",
-                ["snapshot_dir"] = snapshotRelativePath,
+                ["state_path"] = "state.json",
                 ["screenshot_path"] = screenshotRelativePath,
                 ["requested_at_utc"] = System.DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
                 ["context"] = context,
                 ["duplicants"] = BuildDuplicantsSnapshot(),
-                ["available_actions"] = BuildAvailableActionsArray()
+                ["pending_actions"] = BuildPendingActionsSnapshot(),
+                ["priorities"] = BuildPrioritiesSnapshot(),
+                ["runtime_config"] = BuildRuntimeConfigObject(),
+                ["assemblies"] = BuildAssembliesObject(),
+                ["scenes"] = BuildScenesObject(),
+                ["singletons"] = BuildSingletonSnapshot()
             };
 
-            JObject bridgePayload = (JObject)requestEnvelope.DeepClone();
+            JObject bridgePayload = (JObject)state.DeepClone();
             bridgePayload["request_dir"] = requestDir;
+            bridgePayload["state_path"] = "state.json";
 
-            WriteJsonSafe(Path.Combine(requestDir, "request.json"), requestEnvelope);
-            WriteJsonSafe(Path.Combine(snapshotDir, "context.json"), context);
-            WriteJsonSafe(Path.Combine(snapshotDir, "runtime_config.json"), BuildRuntimeConfigObject());
-            WriteJsonSafe(Path.Combine(snapshotDir, "assemblies.json"), BuildAssembliesObject());
-            WriteJsonSafe(Path.Combine(snapshotDir, "scenes.json"), BuildScenesObject());
-            WriteJsonSafe(Path.Combine(snapshotDir, "singletons.json"), BuildSingletonSnapshot());
+            WriteJsonSafe(Path.Combine(requestDir, "state.json"), state);
 
             return new RequestContext
             {
                 RequestId = requestId,
                 RequestDir = requestDir,
-                SnapshotDir = snapshotDir,
                 PayloadJson = bridgePayload.ToString(Formatting.None)
             };
         }
@@ -921,17 +901,6 @@ namespace OniAiAssistant
             };
         }
 
-        private static JArray BuildAvailableActionsArray()
-        {
-            var actions = new JArray();
-            foreach (string actionType in AvailableActionTypes)
-            {
-                actions.Add(actionType);
-            }
-
-            return actions;
-        }
-
         private static JArray BuildDuplicantsSnapshot()
         {
             var snapshot = new JArray();
@@ -965,6 +934,85 @@ namespace OniAiAssistant
             }
 
             return snapshot;
+        }
+
+        private static JArray BuildPendingActionsSnapshot()
+        {
+            var pending = new JArray();
+            MonoBehaviour[] behaviours = FindObjectsOfType<MonoBehaviour>();
+            foreach (MonoBehaviour behaviour in behaviours)
+            {
+                if (behaviour == null || behaviour.gameObject == null)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(behaviour.GetType().Name, "MinionIdentity", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string duplicantId = behaviour.gameObject.GetInstanceID().ToString(CultureInfo.InvariantCulture);
+                string duplicantName = ResolveDuplicantName(behaviour);
+
+                var item = new JObject
+                {
+                    ["duplicant_id"] = duplicantId,
+                    ["duplicant_name"] = duplicantName
+                };
+
+                JObject status = BuildDuplicantStatusObject(behaviour);
+                if (status.TryGetValue("current_chore", StringComparison.OrdinalIgnoreCase, out JToken currentChore))
+                {
+                    item["current_action"] = currentChore;
+                }
+
+                Component choreConsumer = FindComponentByTypeName(behaviour.gameObject, "ChoreConsumer");
+                if (choreConsumer != null)
+                {
+                    object queue = TryGetMemberValue(choreConsumer, "choreQueue")
+                        ?? TryGetMemberValue(choreConsumer, "chores")
+                        ?? TryGetMemberValue(choreConsumer, "availableChores");
+                    JToken queueToken = ConvertToJToken(queue, 2);
+                    if (queueToken != null)
+                    {
+                        item["queue"] = queueToken;
+                    }
+                }
+
+                pending.Add(item);
+            }
+
+            return pending;
+        }
+
+        private static JArray BuildPrioritiesSnapshot()
+        {
+            var priorities = new JArray();
+            MonoBehaviour[] behaviours = FindObjectsOfType<MonoBehaviour>();
+            foreach (MonoBehaviour behaviour in behaviours)
+            {
+                if (behaviour == null || behaviour.gameObject == null)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(behaviour.GetType().Name, "MinionIdentity", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var item = new JObject
+                {
+                    ["duplicant_id"] = behaviour.gameObject.GetInstanceID().ToString(CultureInfo.InvariantCulture),
+                    ["duplicant_name"] = ResolveDuplicantName(behaviour),
+                    ["values"] = BuildDuplicantPriorityObject(behaviour)
+                };
+
+                priorities.Add(item);
+            }
+
+            return priorities;
         }
 
         private static string ResolveDuplicantName(MonoBehaviour identity)
@@ -1731,8 +1779,6 @@ namespace OniAiAssistant
             public string RequestId { get; set; }
 
             public string RequestDir { get; set; }
-
-            public string SnapshotDir { get; set; }
 
             public string PayloadJson { get; set; }
         }

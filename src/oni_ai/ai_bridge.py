@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 
-LOGGER = logging.getLogger("oni_ai_bridge")
+LOGGER = logging.getLogger("oni_ai")
 
 
 def is_truthy_env(var_name: str, default: bool) -> bool:
@@ -94,6 +94,22 @@ def normalize_action(raw_output: str, request_tag: str = "-") -> str:
                     LOGGER.info("request=%s mapped legacy set_speed=%s", request_tag, speed)
                     return json.dumps({"actions": [{"id": "set_speed_1", "type": "set_speed", "params": {"speed": speed}}]}, ensure_ascii=False)
             if isinstance(parsed.get("actions"), list):
+                normalized_actions = []
+                for item in parsed.get("actions", []):
+                    if not isinstance(item, dict):
+                        continue
+
+                    normalized_item = dict(item)
+                    item_type = str(normalized_item.get("type", "")).strip()
+                    if not item_type:
+                        item_type = str(normalized_item.get("action", "")).strip()
+
+                    if item_type:
+                        normalized_item["type"] = item_type
+
+                    normalized_actions.append(normalized_item)
+
+                parsed["actions"] = normalized_actions
                 LOGGER.info("request=%s accepted structured actions payload with count=%s", request_tag, len(parsed.get("actions", [])))
                 return json.dumps(parsed, ensure_ascii=False)
     except json.JSONDecodeError:
@@ -122,16 +138,22 @@ def build_prompt(has_screenshot: bool) -> str:
     custom_prompt = os.getenv(
         "ONI_AI_PROMPT",
         (
-            "You are an ONI planning agent. Read request.json (including available_actions and duplicants), all files under ./snapshot, "
-            "and the local reference files ./bridge-request.schema.json, ./bridge-response.schema.json, "
-            "./bridge-request.example.json, ./bridge-response.example.json. "
-            "Your output MUST be valid JSON matching bridge-response.schema.json. "
-            "You may emit any action type allowed by the schema enum, including: "
-            "set_speed, no_op, build, dig, deconstruct, priority, arrangement, research, pause, resume, cancel, "
-            "set_duplicant_status, set_duplicant_priority, set_duplicant_skills. "
-            "Return ONLY JSON with this shape: "
-            "{\"actions\":[{\"id\":\"a1\",\"type\":\"set_speed\",\"params\":{\"speed\":2}}],\"notes\":\"...\"}. "
-            "For unsupported or uncertain operations, still include them in actions; executor may mark unsupported."
+            "You are an ONI survival operations planner. "
+            "Primary objective: keep duplicants alive (oxygen, food, temperature safety, no idle-critical failures). "
+            "Secondary objective: stabilize and improve colony reliability. "
+            "Read state.json (single source of truth for colony state), "
+            "and local references: ./bridge-request.schema.json and ./bridge-response.schema.json. "
+            "Output MUST be valid JSON matching bridge-response.schema.json. "
+            "Return a meaningful prioritized plan with 3-8 actions by default. "
+            "Do NOT return a trivial single-action plan (for example only set_speed) unless there is a clear emergency reason; "
+            "if so, explain that reason in notes. "
+            "Prefer actions that directly improve survival margin and execution clarity: "
+            "priority, set_duplicant_priority, set_duplicant_skills, build, dig, research, arrangement, plus speed control when needed. "
+            "Use cancel when a previously proposed action is unsafe or conflicts with survival goals. "
+            "Always include stable action ids and concrete params. "
+            "Return ONLY JSON with top-level keys in this order: analysis, suggestions, actions, notes. "
+            "analysis should summarize colony risk and why the plan helps survival. "
+            "suggestions should be concise human-readable bullets as an array of strings."
         ),
     )
 
@@ -139,8 +161,9 @@ def build_prompt(has_screenshot: bool) -> str:
     return f"{custom_prompt}\n\nNote: {screenshot_note}\n"
 
 
-def wait_for_screenshot(snapshot_dir: str, request_tag: str) -> bool:
-    screenshot_path = os.path.join(snapshot_dir, "screenshot.png")
+def wait_for_screenshot(request_dir: str, payload: dict, request_tag: str) -> bool:
+    screenshot_hint = str(payload.get("screenshot_path", "")).strip() or "screenshot.png"
+    screenshot_path = screenshot_hint if os.path.isabs(screenshot_hint) else os.path.join(request_dir, screenshot_hint)
     wait_ms = int(os.getenv("ONI_AI_SCREENSHOT_WAIT_MS", "500"))
     poll_ms = int(os.getenv("ONI_AI_SCREENSHOT_POLL_MS", "50"))
 
@@ -234,8 +257,7 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
 
     copy_reference_assets_to_request_dir(request_dir, request_tag)
 
-    snapshot_dir = os.path.join(request_dir, "snapshot")
-    has_screenshot = wait_for_screenshot(snapshot_dir, request_tag)
+    has_screenshot = wait_for_screenshot(request_dir, payload, request_tag)
 
     LOGGER.info(
         "request=%s invoking codex cmd=%s timeout=%ss request_dir=%s has_screenshot=%s skip_git_repo_check=%s",

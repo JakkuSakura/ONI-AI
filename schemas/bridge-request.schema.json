@@ -8,12 +8,13 @@
   "required": [
     "request_id",
     "request_dir",
-    "snapshot_dir",
+    "state_path",
     "screenshot_path",
     "requested_at_utc",
     "context",
     "duplicants",
-    "available_actions"
+    "pending_actions",
+    "priorities"
   ],
   "properties": {
     "request_id": {
@@ -24,12 +25,12 @@
     "request_dir": {
       "type": "string",
       "minLength": 1,
-      "description": "Request working directory path; prefer relative in request.json (e.g. .)."
+      "description": "Request working directory path; use absolute path in bridge payload and . in state.json."
     },
-    "snapshot_dir": {
+    "state_path": {
       "type": "string",
       "minLength": 1,
-      "description": "Path to snapshot directory; prefer relative to request_dir."
+      "description": "Path to consolidated state JSON file; prefer relative to request_dir (state.json)."
     },
     "screenshot_path": {
       "type": "string",
@@ -64,29 +65,6 @@
         "unscaled_time_seconds": { "type": "number" }
       }
     },
-    "available_actions": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "string",
-        "enum": [
-          "set_speed",
-          "no_op",
-          "build",
-          "dig",
-          "deconstruct",
-          "priority",
-          "arrangement",
-          "research",
-          "pause",
-          "resume",
-          "cancel",
-          "set_duplicant_status",
-          "set_duplicant_priority",
-          "set_duplicant_skills"
-        ]
-      }
-    },
     "duplicants": {
       "type": "array",
       "items": {
@@ -103,6 +81,45 @@
             "items": { "type": ["string", "object", "number", "boolean"] }
           }
         }
+      }
+    },
+    "pending_actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "priorities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "runtime_config": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "assemblies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "scenes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "singletons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
       }
     }
   }

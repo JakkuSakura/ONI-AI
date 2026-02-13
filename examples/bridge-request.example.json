@@ -1,8 +1,8 @@
 {
   "request_id": "20260213_113310_743_8765",
   "request_dir": ".",
-  "snapshot_dir": "snapshot",
-  "screenshot_path": "snapshot/screenshot.png",
+  "state_path": "state.json",
+  "screenshot_path": "screenshot.png",
   "requested_at_utc": "2026-02-13T11:33:10.7440980Z",
   "context": {
     "cycle": 0,
@@ -33,20 +33,49 @@
       ]
     }
   ],
-  "available_actions": [
-    "set_speed",
-    "no_op",
-    "build",
-    "dig",
-    "deconstruct",
-    "priority",
-    "arrangement",
-    "research",
-    "pause",
-    "resume",
-    "cancel",
-    "set_duplicant_status",
-    "set_duplicant_priority",
-    "set_duplicant_skills"
+  "pending_actions": [
+    {
+      "duplicant_id": "17932",
+      "duplicant_name": "Ada",
+      "current_action": "Idle"
+    }
+  ],
+  "priorities": [
+    {
+      "duplicant_id": "17932",
+      "duplicant_name": "Ada",
+      "values": {
+        "dig": 6,
+        "build": 5
+      }
+    }
+  ],
+  "runtime_config": {
+    "unity_version": "2021.3.39f1",
+    "platform": "OSXPlayer"
+  },
+  "assemblies": [
+    {
+      "name": "Assembly-CSharp",
+      "version": "0.0.0.0"
+    }
+  ],
+  "scenes": [
+    {
+      "index": 0,
+      "name": "Main",
+      "is_loaded": true
+    }
+  ],
+  "singletons": [
+    {
+      "type": "SpeedControlScreen",
+      "summary": {
+        "values": {
+          "IsPaused": true,
+          "CurrentSpeed": 2
+        }
+      }
+    }
   ]
 }

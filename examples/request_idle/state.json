@@ -1,0 +1,194 @@
+{
+  "request_id": "example_request_idle",
+  "request_dir": ".",
+  "state_path": "state.json",
+  "screenshot_path": "screenshot.png",
+  "requested_at_utc": "2026-02-13T12:00:00Z",
+  "context": {
+    "cycle": 21,
+    "time_since_cycle_start": 122.8,
+    "time_in_cycles": 21.2,
+    "paused": true,
+    "current_speed": 1,
+    "previous_speed": 1,
+    "real_time_since_startup_seconds": 6200.0,
+    "unscaled_time_seconds": 6198.4
+  },
+  "world": {
+    "cluster_id": "cluster_0",
+    "world_id": 0,
+    "world_name": "The Printing Pod",
+    "asteroid_type": "Terrania",
+    "cycle": 21,
+    "oxygen_percent_estimate": 73.4,
+    "average_temperature_c": 24.8,
+    "food_kcal_estimate": 42500,
+    "dupe_count": 4,
+    "camera": {
+      "center_cell": {
+        "x": 120,
+        "y": 64
+      },
+      "visible_bounds": {
+        "x_min": 117,
+        "x_max": 123,
+        "y_min": 61,
+        "y_max": 67
+      }
+    },
+    "blocks_on_screen": [
+      {"x":117,"y":61,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":25.6},
+      {"x":118,"y":61,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":25.4},
+      {"x":119,"y":61,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":25.1},
+      {"x":120,"y":61,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":24.9},
+      {"x":121,"y":61,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":24.8},
+      {"x":122,"y":61,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":24.8},
+      {"x":123,"y":61,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":24.7},
+
+      {"x":117,"y":62,"element":"Oxygen","state":"Gas","mass_kg":1.7,"temperature_c":24.7},
+      {"x":118,"y":62,"element":"Oxygen","state":"Gas","mass_kg":1.8,"temperature_c":24.6},
+      {"x":119,"y":62,"element":"Oxygen","state":"Gas","mass_kg":1.9,"temperature_c":24.5},
+      {"x":120,"y":62,"element":"Oxygen","state":"Gas","mass_kg":2.0,"temperature_c":24.4},
+      {"x":121,"y":62,"element":"Oxygen","state":"Gas","mass_kg":2.0,"temperature_c":24.4},
+      {"x":122,"y":62,"element":"Oxygen","state":"Gas","mass_kg":1.8,"temperature_c":24.5},
+      {"x":123,"y":62,"element":"Oxygen","state":"Gas","mass_kg":1.6,"temperature_c":24.6},
+
+      {"x":117,"y":63,"element":"Oxygen","state":"Gas","mass_kg":1.8,"temperature_c":24.8},
+      {"x":118,"y":63,"element":"Oxygen","state":"Gas","mass_kg":2.0,"temperature_c":24.8},
+      {"x":119,"y":63,"element":"Oxygen","state":"Gas","mass_kg":2.1,"temperature_c":24.7},
+      {"x":120,"y":63,"element":"Oxygen","state":"Gas","mass_kg":2.2,"temperature_c":24.7},
+      {"x":121,"y":63,"element":"Oxygen","state":"Gas","mass_kg":2.1,"temperature_c":24.7},
+      {"x":122,"y":63,"element":"Oxygen","state":"Gas","mass_kg":2.0,"temperature_c":24.8},
+      {"x":123,"y":63,"element":"Oxygen","state":"Gas","mass_kg":1.9,"temperature_c":24.9},
+
+      {"x":117,"y":64,"element":"Oxygen","state":"Gas","mass_kg":1.9,"temperature_c":25.0},
+      {"x":118,"y":64,"element":"Oxygen","state":"Gas","mass_kg":2.1,"temperature_c":25.0},
+      {"x":119,"y":64,"element":"Oxygen","state":"Gas","mass_kg":2.2,"temperature_c":24.9},
+      {"x":120,"y":64,"element":"Oxygen","state":"Gas","mass_kg":2.3,"temperature_c":24.9},
+      {"x":121,"y":64,"element":"Oxygen","state":"Gas","mass_kg":2.2,"temperature_c":24.9},
+      {"x":122,"y":64,"element":"Oxygen","state":"Gas","mass_kg":2.1,"temperature_c":25.0},
+      {"x":123,"y":64,"element":"Oxygen","state":"Gas","mass_kg":2.0,"temperature_c":25.1},
+
+      {"x":117,"y":65,"element":"Oxygen","state":"Gas","mass_kg":1.8,"temperature_c":25.2},
+      {"x":118,"y":65,"element":"Oxygen","state":"Gas","mass_kg":2.0,"temperature_c":25.1},
+      {"x":119,"y":65,"element":"Oxygen","state":"Gas","mass_kg":2.1,"temperature_c":25.0},
+      {"x":120,"y":65,"element":"Oxygen","state":"Gas","mass_kg":2.2,"temperature_c":25.0},
+      {"x":121,"y":65,"element":"Oxygen","state":"Gas","mass_kg":2.0,"temperature_c":25.1},
+      {"x":122,"y":65,"element":"Oxygen","state":"Gas","mass_kg":1.9,"temperature_c":25.2},
+      {"x":123,"y":65,"element":"Oxygen","state":"Gas","mass_kg":1.7,"temperature_c":25.3},
+
+      {"x":117,"y":66,"element":"CarbonDioxide","state":"Gas","mass_kg":1.2,"temperature_c":25.4},
+      {"x":118,"y":66,"element":"CarbonDioxide","state":"Gas","mass_kg":1.3,"temperature_c":25.3},
+      {"x":119,"y":66,"element":"CarbonDioxide","state":"Gas","mass_kg":1.4,"temperature_c":25.2},
+      {"x":120,"y":66,"element":"CarbonDioxide","state":"Gas","mass_kg":1.5,"temperature_c":25.1},
+      {"x":121,"y":66,"element":"CarbonDioxide","state":"Gas","mass_kg":1.4,"temperature_c":25.1},
+      {"x":122,"y":66,"element":"CarbonDioxide","state":"Gas","mass_kg":1.3,"temperature_c":25.2},
+      {"x":123,"y":66,"element":"CarbonDioxide","state":"Gas","mass_kg":1.2,"temperature_c":25.3},
+
+      {"x":117,"y":67,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":25.7},
+      {"x":118,"y":67,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":25.6},
+      {"x":119,"y":67,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":25.4},
+      {"x":120,"y":67,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":25.3},
+      {"x":121,"y":67,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":25.2},
+      {"x":122,"y":67,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":25.2},
+      {"x":123,"y":67,"element":"Sandstone","state":"Solid","mass_kg":1840,"temperature_c":25.1}
+    ]
+  },
+  "runtime_config": {
+    "unity_version": "2021.3.39f1",
+    "platform": "OSXPlayer",
+    "target_frame_rate": -1,
+    "product_name": "Oxygen Not Included",
+    "version": "U55-678078",
+    "scene_count": 1
+  },
+  "assemblies": [
+    {
+      "name": "Assembly-CSharp",
+      "version": "0.0.0.0"
+    },
+    {
+      "name": "UnityEngine.CoreModule",
+      "version": "0.0.0.0"
+    }
+  ],
+  "scenes": [
+    {
+      "index": 0,
+      "name": "Main",
+      "is_loaded": true,
+      "root_count": 1,
+      "roots": [
+        {
+          "name": "Game",
+          "active": true,
+          "child_count": 4,
+          "components": [
+            "Game",
+            "KMonoBehaviour"
+          ]
+        }
+      ]
+    }
+  ],
+  "singletons": [
+    {
+      "type": "SpeedControlScreen",
+      "summary": {
+        "object_type": "SpeedControlScreen",
+        "values": {
+          "IsPaused": true,
+          "CurrentSpeed": 1
+        }
+      }
+    },
+    {
+      "type": "GameClock",
+      "summary": {
+        "object_type": "GameClock",
+        "values": {
+          "Cycle": 21,
+          "TimeInCycle": 122.8
+        }
+      }
+    }
+  ],
+  "duplicants": [
+    {
+      "id": "1001",
+      "name": "Ada",
+      "status": {
+        "active_self": true,
+        "active_in_hierarchy": true,
+        "current_chore": "Idle"
+      },
+      "priority": {
+        "dig": 5,
+        "build": 5,
+        "research": 4
+      },
+      "skills": [
+        "ImprovedDigging1"
+      ]
+    }
+  ],
+  "pending_actions": [
+    {
+      "duplicant_id": "1001",
+      "duplicant_name": "Ada",
+      "current_action": "Idle",
+      "queue": []
+    }
+  ],
+  "priorities": [
+    {
+      "duplicant_id": "1001",
+      "duplicant_name": "Ada",
+      "values": {
+        "dig": 5,
+        "build": 5,
+        "research": 4
+      }
+    }
+  ]
+}
