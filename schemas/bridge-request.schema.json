@@ -8,7 +8,7 @@
   "required": [
     "request_id",
     "request_dir",
-    "state_path",
+    "api_base_url",
     "screenshot_path",
     "requested_at_utc",
     "context",
@@ -25,12 +25,27 @@
     "request_dir": {
       "type": "string",
       "minLength": 1,
-      "description": "Request working directory path; use absolute path in bridge payload and . in state.json."
+      "description": "Request working directory path used as Codex execution cwd."
     },
-    "state_path": {
+    "api_base_url": {
       "type": "string",
       "minLength": 1,
-      "description": "Path to consolidated state JSON file; prefer relative to request_dir (state.json)."
+      "description": "Base URL for ONI-side HTTP API, for example http://127.0.0.1:8766."
+    },
+    "state_endpoint": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional explicit state endpoint URL."
+    },
+    "actions_endpoint": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional explicit actions endpoint URL."
+    },
+    "health_endpoint": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional explicit health endpoint URL."
     },
     "screenshot_path": {
       "type": "string",

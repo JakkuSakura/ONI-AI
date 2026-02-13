@@ -62,7 +62,7 @@ Optional env vars:
 - `ONI_AI_SCREENSHOT_WAIT_MS` (default: `500`, wait before `codex exec` for screenshot flush)
 - `ONI_AI_SCREENSHOT_POLL_MS` (default: `50`, poll interval while waiting for screenshot)
 
-The bridge writes request data to a temp directory (`state.json`, optional `screenshot.png`), with `state.json` as the single source of truth including context, duplicants (`status`, `priority`, `skills`), pending actions, priority snapshots, runtime config, assemblies, scenes, and singleton summaries. It stages `schemas/*` and `examples/*` references into that request directory, invokes `codex exec` there, then parses the output into ONI actions.
+The bridge writes request artifacts to a temp directory (optional `screenshot.png` plus logs) and stages `schemas/*` + `examples/*` there for `codex exec`. Colony state now comes from ONI-side HTTP APIs (`/state`) instead of dumping `state.json` files.
 
 By default, mod requests are written under system tmp:
 
@@ -118,6 +118,19 @@ Useful config keys for runtime reload:
 - `runtime_reload_interval_seconds` (default `1.0`)
 - `request_root_dir` (default empty -> `/tmp/oni_ai_assistant/requests`)
 
+Built-in ONI-side HTTP server keys:
+
+- `http_server_enabled` (default `true`)
+- `http_server_host` (default `127.0.0.1`)
+- `http_server_port` (default `8766`)
+
+ONI-side HTTP endpoints:
+
+- `GET /health` -> basic liveness and busy status
+- `GET /state` -> latest captured state plus last execution summary
+- `GET /actions` -> currently queued HTTP actions
+- `POST /actions` -> enqueue actions (`{"actions":[...]}`), applied on game main thread
+
 Screenshot files are saved in the installed mod folder under `captures/`.
 
 ## License
@@ -134,6 +147,13 @@ Run automated tests:
 cd ~/Dev/ONI-AI
 uv sync --group dev
 uv run pytest
+```
+
+Run bridge integration with C# mock ONI API server:
+
+```bash
+cd ~/Dev/ONI-AI
+uv run pytest -m integration -q
 ```
 
 
@@ -162,7 +182,7 @@ The test writes raw and extracted responses under a temp request directory:
 cd ~/Dev/ONI-AI
 mkdir -p /tmp/oni-test
 cat >/tmp/oni-test/state.json <<'JSON'
-{"request_id":"manual_test","request_dir":".","state_path":"state.json","screenshot_path":"screenshot.png","requested_at_utc":"2026-02-13T00:00:00Z","context":{"cycle":1,"time_since_cycle_start":10.0,"time_in_cycles":1.0,"paused":true,"current_speed":1,"previous_speed":1,"real_time_since_startup_seconds":10.0,"unscaled_time_seconds":10.0},"duplicants":[]}
+{"request_id":"manual_test","request_dir":"/tmp/oni-test","api_base_url":"http://127.0.0.1:8766","state_endpoint":"http://127.0.0.1:8766/state","actions_endpoint":"http://127.0.0.1:8766/actions","health_endpoint":"http://127.0.0.1:8766/health","screenshot_path":"screenshot.png","requested_at_utc":"2026-02-13T00:00:00Z","context":{"cycle":1,"time_since_cycle_start":10.0,"time_in_cycles":1.0,"paused":true,"current_speed":1,"previous_speed":1,"real_time_since_startup_seconds":10.0,"unscaled_time_seconds":10.0},"duplicants":[],"pending_actions":[],"priorities":[]}
 JSON
 cat >/tmp/fake-codex <<'SCRIPT'
 #!/usr/bin/env bash
@@ -177,7 +197,7 @@ In another terminal:
 ```bash
 curl -sS -X POST http://127.0.0.1:8765/analyze \
   -H 'Content-Type: application/json' \
-  -d '{"request_dir":"/tmp/oni-test"}'
+  --data-binary @/tmp/oni-test/state.json
 ```
 
 Expected output includes a JSON `actions` array.

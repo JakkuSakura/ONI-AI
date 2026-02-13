@@ -14,6 +14,13 @@ from pathlib import Path
 
 
 LOGGER = logging.getLogger("oni_ai")
+SERVER_STARTED_AT = time.monotonic()
+RUNTIME_STATE_LOCK = threading.Lock()
+RUNTIME_STATE: dict[str, object] = {
+    "last_request": None,
+    "last_response": None,
+    "manual_actions": [],
+}
 
 
 def is_truthy_env(var_name: str, default: bool) -> bool:
@@ -65,6 +72,36 @@ def summarize_actions(normalized_response: str) -> str:
             action_types.append(str(action.get("type") or action.get("action") or "unknown"))
 
     return f"actions={len(actions)} types={action_types}"
+
+
+def get_runtime_state_snapshot() -> dict:
+    with RUNTIME_STATE_LOCK:
+        return {
+            "last_request": RUNTIME_STATE.get("last_request"),
+            "last_response": RUNTIME_STATE.get("last_response"),
+            "manual_actions": list(RUNTIME_STATE.get("manual_actions") or []),
+        }
+
+
+def set_last_analyze_payload(payload: dict, normalized_response: str) -> None:
+    with RUNTIME_STATE_LOCK:
+        RUNTIME_STATE["last_request"] = payload
+        try:
+            RUNTIME_STATE["last_response"] = json.loads(normalized_response)
+        except json.JSONDecodeError:
+            RUNTIME_STATE["last_response"] = {"actions": []}
+
+
+def set_manual_actions(actions: list[dict]) -> None:
+    with RUNTIME_STATE_LOCK:
+        RUNTIME_STATE["manual_actions"] = actions
+
+
+def reset_runtime_state_for_tests() -> None:
+    with RUNTIME_STATE_LOCK:
+        RUNTIME_STATE["last_request"] = None
+        RUNTIME_STATE["last_response"] = None
+        RUNTIME_STATE["manual_actions"] = []
 
 
 def strip_fence(text: str) -> str:
@@ -134,15 +171,27 @@ def normalize_action(raw_output: str, request_tag: str = "-") -> str:
     return json.dumps({"actions": []}, ensure_ascii=False)
 
 
-def build_prompt(has_screenshot: bool) -> str:
+def build_prompt(payload: dict, has_screenshot: bool) -> str:
+    api_base_url = str(payload.get("api_base_url", "")).strip()
+    state_endpoint = str(payload.get("state_endpoint", "")).strip()
+    actions_endpoint = str(payload.get("actions_endpoint", "")).strip()
+    health_endpoint = str(payload.get("health_endpoint", "")).strip()
+
+    if api_base_url:
+        normalized_api_base = api_base_url.rstrip("/")
+        state_endpoint = state_endpoint or f"{normalized_api_base}/state"
+        actions_endpoint = actions_endpoint or f"{normalized_api_base}/actions"
+        health_endpoint = health_endpoint or f"{normalized_api_base}/health"
+
     custom_prompt = os.getenv(
         "ONI_AI_PROMPT",
         (
             "You are an ONI survival operations planner. "
             "Primary objective: keep duplicants alive (oxygen, food, temperature safety, no idle-critical failures). "
             "Secondary objective: stabilize and improve colony reliability. "
-            "Read state.json (single source of truth for colony state), "
-            "and local references: ./bridge-request.schema.json and ./bridge-response.schema.json. "
+            "Use local references: ./bridge-request.schema.json and ./bridge-response.schema.json. "
+            "Read the schema directly to understand all supported actions and required fields. "
+            "Before planning, fetch live game state from ONI HTTP APIs. "
             "Output MUST be valid JSON matching bridge-response.schema.json. "
             "Return a meaningful prioritized plan with 3-8 actions by default. "
             "Do NOT return a trivial single-action plan (for example only set_speed) unless there is a clear emergency reason; "
@@ -153,14 +202,33 @@ def build_prompt(has_screenshot: bool) -> str:
             "Be foreseeable and predictive: push the colony toward final goals of sustainable living and advanced technologies, including aerospace. "
             "Use cancel when a previously proposed action is unsafe or conflicts with survival goals. "
             "Always include stable action ids and concrete params. "
+            "Do not run broad exploratory shell scans or commands that print huge outputs. "
+            "Use concise, targeted file reads only. "
+            "When state context is paused and actions_endpoint is available, you may submit immediate actions via POST to /actions while planning. "
+            "If you do live POST, keep it minimal, survival-focused, and still return final JSON plan. "
             "Return ONLY JSON with top-level keys in this order: analysis, suggestions, actions, notes. "
             "analysis should summarize colony risk and why the plan helps survival. "
             "suggestions should be concise human-readable bullets as an array of strings."
         ),
     )
 
+    api_note = ""
+    if state_endpoint:
+        api_note = (
+            "API endpoints: "
+            f"state={state_endpoint}; "
+            f"actions={actions_endpoint or 'N/A'}; "
+            f"health={health_endpoint or 'N/A'}. "
+            "Use GET state endpoint as primary source of truth."
+        )
+    else:
+        api_note = (
+            "No API endpoint info provided in this request payload. "
+            "Use request payload fields as fallback state input."
+        )
+
     screenshot_note = "screenshot.png is available." if has_screenshot else "screenshot.png is not available."
-    return f"{custom_prompt}\n\nNote: {screenshot_note}\n"
+    return f"{custom_prompt}\n\n{api_note}\nNote: {screenshot_note}\n"
 
 
 def wait_for_screenshot(request_dir: str, payload: dict, request_tag: str) -> bool:
@@ -238,6 +306,27 @@ def copy_reference_assets_to_request_dir(request_dir: str, request_tag: str) -> 
     )
 
 
+def read_last_message_output(last_message_path: Path, request_tag: str) -> str:
+    if not last_message_path.exists():
+        return ""
+
+    try:
+        text = last_message_path.read_text(encoding="utf-8")
+    except OSError:
+        LOGGER.exception("request=%s failed reading output-last-message file=%s", request_tag, last_message_path)
+        return ""
+
+    if text.strip():
+        LOGGER.info(
+            "request=%s loaded codex last-message output path=%s chars=%s",
+            request_tag,
+            last_message_path,
+            len(text),
+        )
+
+    return text
+
+
 def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
     codex_cmd_raw = os.getenv("ONI_AI_CODEX_CMD", "codex").strip() or "codex"
     try:
@@ -260,6 +349,10 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
     copy_reference_assets_to_request_dir(request_dir, request_tag)
 
     has_screenshot = wait_for_screenshot(request_dir, payload, request_tag)
+    logs_dir = Path(request_dir) / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    schema_path = Path(request_dir) / "bridge-response.schema.json"
+    last_message_path = logs_dir / "codex_last_message.json"
 
     LOGGER.info(
         "request=%s invoking codex cmd=%s timeout=%ss request_dir=%s has_screenshot=%s skip_git_repo_check=%s",
@@ -271,9 +364,9 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
         skip_git_repo_check,
     )
 
-    prompt = build_prompt(has_screenshot)
+    prompt = build_prompt(payload, has_screenshot)
     LOGGER.debug("request=%s prompt_preview=%s", request_tag, preview_text(prompt, 500))
-    command = [*codex_cmd_parts, "exec"]
+    command = [*codex_cmd_parts, "exec", "--output-schema", str(schema_path), "-o", str(last_message_path)]
     if skip_git_repo_check:
         command.append("--skip-git-repo-check")
     command.append(prompt)
@@ -331,9 +424,7 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
             stderr_chunks.append(f"Timed out after {timeout_seconds} seconds\n")
     except (subprocess.SubprocessError, OSError, ValueError) as exc:
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        logs_dir = os.path.join(request_dir, "logs")
-        os.makedirs(logs_dir, exist_ok=True)
-        with open(os.path.join(logs_dir, "codex_invoke_error.txt"), "w", encoding="utf-8") as file:
+        with open(logs_dir / "codex_invoke_error.txt", "w", encoding="utf-8") as file:
             file.write(str(exc))
         LOGGER.exception("request=%s codex invocation failed after %sms", request_tag, elapsed_ms)
         return json.dumps({"actions": []}, ensure_ascii=False)
@@ -343,13 +434,11 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
     stdout_text = "".join(stdout_chunks)
     stderr_text = "".join(stderr_chunks)
 
-    logs_dir = os.path.join(request_dir, "logs")
-    os.makedirs(logs_dir, exist_ok=True)
-    with open(os.path.join(logs_dir, "codex_stdout.txt"), "w", encoding="utf-8") as file:
+    with open(logs_dir / "codex_stdout.txt", "w", encoding="utf-8") as file:
         file.write(stdout_text)
-    with open(os.path.join(logs_dir, "codex_stderr.txt"), "w", encoding="utf-8") as file:
+    with open(logs_dir / "codex_stderr.txt", "w", encoding="utf-8") as file:
         file.write(stderr_text)
-    with open(os.path.join(logs_dir, "codex_exit_code.txt"), "w", encoding="utf-8") as file:
+    with open(logs_dir / "codex_exit_code.txt", "w", encoding="utf-8") as file:
         file.write(str(return_code))
 
     LOGGER.info(
@@ -359,26 +448,102 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
         elapsed_ms,
         len(stdout_text),
         len(stderr_text),
-        logs_dir,
+        str(logs_dir),
     )
     if stderr_text:
         LOGGER.warning("request=%s codex stderr preview=%s", request_tag, preview_text(stderr_text, 500))
 
+    raw_last_message = read_last_message_output(last_message_path, request_tag)
+
     if return_code != 0:
-        combined = stdout_text + "\n" + stderr_text
+        combined = raw_last_message or (stdout_text + "\n" + stderr_text)
         normalized = normalize_action(combined, request_tag=request_tag)
         LOGGER.info("request=%s normalized nonzero-exit output => %s", request_tag, summarize_actions(normalized))
         return normalized
 
-    normalized = normalize_action(stdout_text, request_tag=request_tag)
+    normalized = normalize_action(raw_last_message or stdout_text, request_tag=request_tag)
     LOGGER.info("request=%s normalized success output => %s", request_tag, summarize_actions(normalized))
     return normalized
 
 
 class OniAiHandler(BaseHTTPRequestHandler):
+    def send_json(self, status_code: int, payload: dict) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        trace_id = uuid.uuid4().hex[:8]
+
+        if self.path == "/health":
+            uptime_seconds = int(time.monotonic() - SERVER_STARTED_AT)
+            self.send_json(200, {"ok": True, "service": "oni_ai", "uptime_seconds": uptime_seconds})
+            return
+
+        if self.path == "/state":
+            snapshot = get_runtime_state_snapshot()
+            last_request = snapshot.get("last_request")
+            if last_request is None:
+                self.send_json(404, {"error": "no_state"})
+                return
+
+            self.send_json(200, {"state": last_request})
+            return
+
+        if self.path == "/actions":
+            snapshot = get_runtime_state_snapshot()
+            response_actions = []
+            last_response = snapshot.get("last_response")
+            if isinstance(last_response, dict) and isinstance(last_response.get("actions"), list):
+                response_actions = last_response.get("actions")
+
+            self.send_json(
+                200,
+                {
+                    "manual_actions": snapshot.get("manual_actions") or [],
+                    "last_response_actions": response_actions,
+                },
+            )
+            return
+
+        LOGGER.warning("trace=%s path=%s method=GET => 404", trace_id, self.path)
+        self.send_response(404)
+        self.end_headers()
+
     def do_POST(self):
         started_at = time.monotonic()
         trace_id = uuid.uuid4().hex[:8]
+
+        if self.path == "/actions":
+            content_length = int(self.headers.get("Content-Length", "0"))
+            raw_body = self.rfile.read(content_length)
+            try:
+                payload = json.loads(raw_body.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                self.send_json(400, {"error": "invalid_json"})
+                return
+
+            actions = payload.get("actions") if isinstance(payload, dict) else None
+            if not isinstance(actions, list):
+                self.send_json(400, {"error": "actions_must_be_list"})
+                return
+
+            normalized_actions = []
+            for item in actions:
+                if not isinstance(item, dict):
+                    continue
+                normalized_item = dict(item)
+                item_type = str(normalized_item.get("type") or normalized_item.get("action") or "").strip()
+                if item_type:
+                    normalized_item["type"] = item_type
+                normalized_actions.append(normalized_item)
+
+            set_manual_actions(normalized_actions)
+            self.send_json(200, {"accepted": len(normalized_actions)})
+            return
 
         if self.path != "/analyze":
             LOGGER.warning("trace=%s path=%s method=POST => 404", trace_id, self.path)
@@ -413,6 +578,8 @@ class OniAiHandler(BaseHTTPRequestHandler):
         command = call_codex_exec(payload, request_tag=request_tag)
         if not isinstance(command, str) or not command.strip():
             command = json.dumps({"actions": []}, ensure_ascii=False)
+
+        set_last_analyze_payload(payload, command)
 
         body = command.strip().encode("utf-8")
         self.send_response(200)

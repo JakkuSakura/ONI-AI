@@ -1,31 +1,35 @@
 {
-  "request_id": "20260213_113310_743_8765",
+  "request_id": "example_idle_001",
   "request_dir": ".",
-  "state_path": "state.json",
+  "api_base_url": "http://127.0.0.1:8766",
+  "state_endpoint": "http://127.0.0.1:8766/state",
+  "actions_endpoint": "http://127.0.0.1:8766/actions",
+  "health_endpoint": "http://127.0.0.1:8766/health",
   "screenshot_path": "screenshot.png",
-  "requested_at_utc": "2026-02-13T11:33:10.7440980Z",
+  "requested_at_utc": "2026-02-13T23:15:00Z",
   "context": {
-    "cycle": 0,
-    "time_since_cycle_start": 230.587387,
-    "time_in_cycles": 0.3843123,
+    "cycle": 42,
+    "time_since_cycle_start": 312.6,
+    "time_in_cycles": 42.52,
     "paused": true,
-    "current_speed": 2,
+    "current_speed": 1,
     "previous_speed": 2,
-    "real_time_since_startup_seconds": 266.868256,
-    "unscaled_time_seconds": 266.856537
+    "real_time_since_startup_seconds": 5123.4,
+    "unscaled_time_seconds": 5098.1
   },
   "duplicants": [
     {
-      "id": "17932",
+      "id": "1001",
       "name": "Ada",
       "status": {
         "active_self": true,
         "active_in_hierarchy": true,
-        "current_chore": "Fetch"
+        "current_chore": "Idle"
       },
       "priority": {
         "dig": 6,
-        "build": 5
+        "build": 5,
+        "life_support": 8
       },
       "skills": [
         "ImprovedDigging1",
@@ -35,47 +39,41 @@
   ],
   "pending_actions": [
     {
-      "duplicant_id": "17932",
-      "duplicant_name": "Ada",
-      "current_action": "Idle"
+      "id": "act_001",
+      "type": "dig",
+      "priority": 6,
+      "status": "queued",
+      "duplicant_id": "1001",
+      "duplicant_name": "Ada"
     }
   ],
   "priorities": [
     {
-      "duplicant_id": "17932",
+      "duplicant_id": "1001",
       "duplicant_name": "Ada",
       "values": {
         "dig": 6,
-        "build": 5
+        "build": 5,
+        "life_support": 8
       }
     }
   ],
-  "runtime_config": {
-    "unity_version": "2021.3.39f1",
-    "platform": "OSXPlayer"
-  },
-  "assemblies": [
-    {
-      "name": "Assembly-CSharp",
-      "version": "0.0.0.0"
-    }
-  ],
-  "scenes": [
-    {
-      "index": 0,
-      "name": "Main",
-      "is_loaded": true
-    }
-  ],
-  "singletons": [
-    {
-      "type": "SpeedControlScreen",
-      "summary": {
-        "values": {
-          "IsPaused": true,
-          "CurrentSpeed": 2
-        }
+  "world": {
+    "world_id": 0,
+    "biome": "Temperate",
+    "surrounding_blocks": [
+      {
+        "x": 22,
+        "y": 16,
+        "element": "Oxygen",
+        "temperature_c": 24.1
+      },
+      {
+        "x": 23,
+        "y": 16,
+        "element": "Sandstone",
+        "temperature_c": 26.3
       }
-    }
-  ]
+    ]
+  }
 }

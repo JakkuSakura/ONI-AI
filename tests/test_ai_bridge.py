@@ -33,14 +33,22 @@ def test_normalize_action_invalid_input_defaults_to_noop() -> None:
 
 
 def test_build_prompt_mentions_screenshot_flag() -> None:
-    prompt_with_image = build_prompt(True)
-    prompt_without_image = build_prompt(False)
+    payload = {
+        "api_base_url": "http://127.0.0.1:8766",
+        "state_endpoint": "http://127.0.0.1:8766/state",
+        "actions_endpoint": "http://127.0.0.1:8766/actions",
+        "health_endpoint": "http://127.0.0.1:8766/health",
+    }
+
+    prompt_with_image = build_prompt(payload, True)
+    prompt_without_image = build_prompt(payload, False)
 
     assert "screenshot.png is available." in prompt_with_image
     assert "screenshot.png is not available." in prompt_without_image
     assert "bridge-response.schema.json" in prompt_with_image
+    assert "state=http://127.0.0.1:8766/state" in prompt_with_image
     assert "set_duplicant_priority" in prompt_with_image
-    assert "Read state.json (single source of truth for colony state)" in prompt_with_image
+    assert "Do not run broad exploratory shell scans" in prompt_with_image
 
 
 def test_call_codex_exec_uses_stubbed_command(tmp_path: Path) -> None:
@@ -69,6 +77,10 @@ def test_call_codex_exec_uses_stubbed_command(tmp_path: Path) -> None:
 
     assert parsed["actions"][0]["params"]["speed"] == 1
     assert "--skip-git-repo-check" in args_file.read_text(encoding="utf-8")
+    assert "--output-schema" in args_file.read_text(encoding="utf-8")
+    args_text = args_file.read_text(encoding="utf-8")
+    assert "--output-schema" in args_text
+    assert "-o" in args_text
     assert (request_dir / "logs" / "codex_stdout.txt").exists()
     assert (request_dir / "bridge-request.schema.json").exists()
     assert (request_dir / "bridge-response.schema.json").exists()
@@ -103,3 +115,34 @@ def test_call_codex_exec_can_disable_skip_git_repo_check(tmp_path: Path) -> None
         os.environ.pop("ONI_AI_CODEX_SKIP_GIT_REPO_CHECK", None)
 
     assert "--skip-git-repo-check" not in args_file.read_text(encoding="utf-8")
+
+
+def test_call_codex_exec_prefers_output_last_message_file(tmp_path: Path) -> None:
+    request_dir = tmp_path / "request"
+    request_dir.mkdir(parents=True)
+
+    stub = tmp_path / "fake-codex.sh"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "out=\"\"\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        "  case \"$1\" in\n"
+        "    -o|--output-last-message) out=\"$2\"; shift 2 ;;\n"
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+        "mkdir -p \"$(dirname \"$out\")\"\n"
+        "printf '%s' '{\"actions\":[{\"id\":\"from_last\",\"type\":\"set_speed\",\"params\":{\"speed\":3}}]}' > \"$out\"\n"
+        "echo 'stdout noise that is not json'\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+
+    os.environ["ONI_AI_CODEX_CMD"] = str(stub)
+    try:
+        parsed = json.loads(call_codex_exec({"request_dir": str(request_dir)}))
+    finally:
+        os.environ.pop("ONI_AI_CODEX_CMD", None)
+
+    assert parsed["actions"][0]["id"] == "from_last"
+    assert parsed["actions"][0]["params"]["speed"] == 3

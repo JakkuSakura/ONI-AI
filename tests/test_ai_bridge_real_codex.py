@@ -47,34 +47,6 @@ def test_call_codex_exec_with_realistic_payload_and_real_codex() -> None:
         "unscaled_time_seconds": 14987.8,
     }
 
-    request_envelope = {
-        "request_id": request_id,
-        "request_dir": str(request_dir),
-        "state_path": "state.json",
-        "screenshot_path": str(screenshot_path),
-        "requested_at_utc": datetime.now(tz=timezone.utc).isoformat(),
-        "context": context,
-        "pending_actions": [
-            {
-                "duplicant_id": "1001",
-                "duplicant_name": "Ada",
-                "current_action": "Idle",
-                "queue": [],
-            }
-        ],
-        "priorities": [
-            {
-                "duplicant_id": "1001",
-                "duplicant_name": "Ada",
-                "values": {"dig": 5, "build": 5},
-            }
-        ],
-        "runtime_config": runtime_config,
-        "assemblies": assemblies,
-        "scenes": scenes,
-        "singletons": singletons,
-    }
-
     runtime_config = {
         "unity_version": "2021.3.39f1",
         "platform": "OSXPlayer",
@@ -144,7 +116,37 @@ def test_call_codex_exec_with_realistic_payload_and_real_codex() -> None:
         },
     ]
 
-    (request_dir / "state.json").write_text(json.dumps(request_envelope, indent=2), encoding="utf-8")
+    request_envelope = {
+        "request_id": request_id,
+        "request_dir": str(request_dir),
+        "api_base_url": "http://127.0.0.1:8766",
+        "state_endpoint": "http://127.0.0.1:8766/state",
+        "actions_endpoint": "http://127.0.0.1:8766/actions",
+        "health_endpoint": "http://127.0.0.1:8766/health",
+        "screenshot_path": str(screenshot_path),
+        "requested_at_utc": datetime.now(tz=timezone.utc).isoformat(),
+        "context": context,
+        "duplicants": [],
+        "pending_actions": [
+            {
+                "duplicant_id": "1001",
+                "duplicant_name": "Ada",
+                "current_action": "Idle",
+                "queue": [],
+            }
+        ],
+        "priorities": [
+            {
+                "duplicant_id": "1001",
+                "duplicant_name": "Ada",
+                "values": {"dig": 5, "build": 5},
+            }
+        ],
+        "runtime_config": runtime_config,
+        "assemblies": assemblies,
+        "scenes": scenes,
+        "singletons": singletons,
+    }
 
     env_backup = {
         "ONI_AI_PROMPT": os.environ.get("ONI_AI_PROMPT"),
@@ -154,13 +156,13 @@ def test_call_codex_exec_with_realistic_payload_and_real_codex() -> None:
     os.environ["ONI_AI_CODEX_CMD"] = "codex"
     os.environ["ONI_AI_CODEX_TIMEOUT_SECONDS"] = "120"
     os.environ["ONI_AI_PROMPT"] = (
-        "You are testing an ONI bridge. Read state.json. "
+        "You are testing an ONI bridge. Use request payload as source of truth. "
         "Return ONLY valid JSON with top-level key actions. "
         "Choose exactly one action: set_speed with params.speed between 1 and 3."
     )
 
     try:
-        normalized_response = call_codex_exec({"request_dir": str(request_dir)})
+        normalized_response = call_codex_exec(request_envelope)
     finally:
         for key, value in env_backup.items():
             if value is None:

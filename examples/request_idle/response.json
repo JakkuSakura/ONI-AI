@@ -1,123 +1,55 @@
 {
-  "analysis": "Colony is stable but oxygen margin is moderate and duplicant task allocation is generic; prioritize survivability throughput.",
+  "analysis": "Cycle 42 is stable but throughput is constrained by idle labor and low-priority critical errands.",
   "suggestions": [
-    "Boost dig/build labor on the primary worker to unlock and complete key infrastructure faster.",
-    "Queue safe excavation for nearby resources and place an oxygen support structure in a central corridor.",
-    "Keep simulation at controlled speed until critical errands become stable."
+    "Keep core life-support errands above dig/build while oxygen generation margin is thin.",
+    "Cancel outdated low-value chores that block survival-critical execution order.",
+    "Queue focused excavation and build tasks that expand breathable space safely."
   ],
   "actions": [
     {
-      "id": "speed-main",
-      "type": "set_speed",
-      "params": {
-        "speed": 2
-      }
-    },
-    {
-      "id": "do-nothing-scan",
-      "type": "no_op"
-    },
-    {
-      "id": "build-oxygen-diffuser",
-      "type": "build",
-      "params": {
-        "building_id": "OxygenDiffuser",
-        "cell": {
-          "x": 22,
-          "y": 16
-        }
-      }
-    },
-    {
-      "id": "dig-algae-pocket",
-      "type": "dig",
-      "params": {
-        "cells": [
-          {
-            "x": 30,
-            "y": 24
-          }
-        ]
-      }
-    },
-    {
-      "id": "deconstruct-ladder",
-      "type": "deconstruct",
-      "params": {
-        "target_id": "ladder_123"
-      }
-    },
-    {
-      "id": "priority-oxygen-line",
-      "type": "priority",
-      "params": {
-        "target_id": "pipe_plan_42",
-        "priority": 7
-      }
-    },
-    {
-      "id": "arrangement-bedroom",
-      "type": "arrangement",
-      "params": {
-        "room_type": "Barracks",
-        "targets": [
-          "cot_a",
-          "cot_b"
-        ]
-      }
-    },
-    {
-      "id": "research-plumbing",
-      "type": "research",
-      "params": {
-        "node_id": "LiquidPiping"
-      }
-    },
-    {
-      "id": "pause-manual",
-      "type": "pause"
-    },
-    {
-      "id": "resume-manual",
-      "type": "resume"
-    },
-    {
-      "id": "cancel-deconstruct",
+      "id": "cancel-obsolete-dig",
       "type": "cancel",
       "params": {
-        "target_action_id": "deconstruct-ladder"
+        "target_action_id": "act_001"
       }
     },
     {
-      "id": "dup-status-active",
-      "type": "set_duplicant_status",
-      "params": {
-        "duplicant_name": "Ada",
-        "active": true
-      }
-    },
-    {
-      "id": "dup-priority-dig",
+      "id": "raise-life-support-priority",
       "type": "set_duplicant_priority",
       "params": {
         "duplicant_name": "Ada",
         "priorities": {
-          "dig": 7,
+          "life_support": 9,
+          "dig": 6,
           "build": 5
         }
       }
     },
     {
-      "id": "dup-skills-focus",
-      "type": "set_duplicant_skills",
+      "id": "plan-safe-dig",
+      "type": "dig",
       "params": {
-        "duplicant_name": "Ada",
-        "skills": [
-          "ImprovedDigging1",
-          "HardDigging"
+        "cells": [
+          { "x": 24, "y": 16 },
+          { "x": 25, "y": 16 }
         ]
+      }
+    },
+    {
+      "id": "build-oxygen-support",
+      "type": "build",
+      "params": {
+        "building_id": "OxygenDiffuser",
+        "cell": { "x": 22, "y": 15 }
+      }
+    },
+    {
+      "id": "speed-stable",
+      "type": "set_speed",
+      "params": {
+        "speed": 2
       }
     }
   ],
-  "notes": "Example payload includes every currently supported schema action type."
+  "notes": "Example response emphasizes survival-first planning, cancellation of stale work, and actionable execution order."
 }

@@ -91,6 +91,7 @@ namespace OniAiAssistant
             configLastWriteTicks = GetConfigLastWriteTicks();
             TryCreateNativeUiButton();
             TryReloadRuntime(true);
+            StartHttpServer();
             Debug.Log("[ONI-AI] Controller initialized");
         }
 
@@ -104,6 +105,8 @@ namespace OniAiAssistant
             TryReloadConfig(false);
 
             TryReloadRuntime(false);
+
+            TryProcessQueuedHttpActions();
 
             if (runtimeHook != null)
             {
@@ -160,6 +163,8 @@ namespace OniAiAssistant
 
         private void OnDestroy()
         {
+            StopHttpServer();
+
             if (runtimeHook == null)
             {
                 return;
@@ -632,9 +637,9 @@ namespace OniAiAssistant
             string screenshotRelativePath = "screenshot.png";
 
             JObject state = BuildStatePayload(requestId, previousSpeed, screenshotRelativePath);
-            JObject bridgePayload = BuildBridgePayload(state, requestDir);
-
-            WriteJsonSafe(Path.Combine(requestDir, "state.json"), state);
+            string apiBaseUrl = BuildApiBaseUrl();
+            JObject bridgePayload = BuildBridgePayload(state, requestDir, apiBaseUrl);
+            UpdateLastStateSnapshot(state);
 
             return new RequestContext
             {
@@ -642,6 +647,17 @@ namespace OniAiAssistant
                 RequestDir = requestDir,
                 PayloadJson = bridgePayload.ToString(Formatting.None)
             };
+        }
+
+        private string BuildApiBaseUrl()
+        {
+            if (config == null)
+            {
+                return string.Empty;
+            }
+
+            string host = string.IsNullOrWhiteSpace(config.HttpServerHost) ? "127.0.0.1" : config.HttpServerHost.Trim();
+            return "http://" + host + ":" + config.HttpServerPort.ToString(CultureInfo.InvariantCulture);
         }
 
         private string GetRequestRootDirectory()
@@ -1445,6 +1461,8 @@ namespace OniAiAssistant
                 ["actions"] = executionLog
             };
 
+            UpdateLastExecutionSnapshot(executionResult);
+
             WriteJsonSafe(Path.Combine(context.RequestDir, "logs", "execution_result.json"), executionResult);
             Debug.Log("[ONI-AI] Executed plan with " + executionLog.Count + " actions");
             return outcome;
@@ -1777,6 +1795,12 @@ namespace OniAiAssistant
 
         public float RuntimeReloadIntervalSeconds { get; private set; } = 1.0f;
 
+        public bool HttpServerEnabled { get; private set; } = true;
+
+        public string HttpServerHost { get; private set; } = "127.0.0.1";
+
+        public int HttpServerPort { get; private set; } = 8766;
+
         public static OniAiConfig Load()
         {
             var config = new OniAiConfig();
@@ -1857,6 +1881,36 @@ namespace OniAiAssistant
                     if (float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float intervalSeconds))
                     {
                         config.RuntimeReloadIntervalSeconds = Mathf.Clamp(intervalSeconds, 0.2f, 30.0f);
+                    }
+
+                    continue;
+                }
+
+                if (key.Equals("http_server_enabled", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (bool.TryParse(value, out bool enabled))
+                    {
+                        config.HttpServerEnabled = enabled;
+                    }
+
+                    continue;
+                }
+
+                if (key.Equals("http_server_host", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        config.HttpServerHost = value.Trim();
+                    }
+
+                    continue;
+                }
+
+                if (key.Equals("http_server_port", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(value, out int port) && port >= 1 && port <= 65535)
+                    {
+                        config.HttpServerPort = port;
                     }
                 }
             }
