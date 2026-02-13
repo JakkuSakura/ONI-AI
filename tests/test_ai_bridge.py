@@ -72,8 +72,8 @@ def test_call_codex_exec_uses_stubbed_command(tmp_path: Path) -> None:
     assert (request_dir / "logs" / "codex_stdout.txt").exists()
     assert (request_dir / "bridge-request.schema.json").exists()
     assert (request_dir / "bridge-response.schema.json").exists()
-    assert (request_dir / "bridge-request.example.json").exists()
-    assert (request_dir / "bridge-response.example.json").exists()
+    assert (request_dir / "state.example.json").exists()
+    assert (request_dir / "response.example.json").exists()
 
 
 def test_call_codex_exec_can_disable_skip_git_repo_check(tmp_path: Path) -> None:

@@ -149,6 +149,8 @@ def build_prompt(has_screenshot: bool) -> str:
             "if so, explain that reason in notes. "
             "Prefer actions that directly improve survival margin and execution clarity: "
             "priority, set_duplicant_priority, set_duplicant_skills, build, dig, research, arrangement, plus speed control when needed. "
+            "Assign a reasonable amount of actions, cancel outdated actions, and optionally update action priorities when execution order should change. "
+            "Be foreseeable and predictive: push the colony toward final goals of sustainable living and advanced technologies, including aerospace. "
             "Use cancel when a previously proposed action is unsafe or conflicts with survival goals. "
             "Always include stable action ids and concrete params. "
             "Return ONLY JSON with top-level keys in this order: analysis, suggestions, actions, notes. "
@@ -206,8 +208,8 @@ def copy_reference_assets_to_request_dir(request_dir: str, request_tag: str) -> 
     source_to_target = {
         project_root / "schemas" / "bridge-request.schema.json": Path(request_dir) / "bridge-request.schema.json",
         project_root / "schemas" / "bridge-response.schema.json": Path(request_dir) / "bridge-response.schema.json",
-        project_root / "examples" / "bridge-request.example.json": Path(request_dir) / "bridge-request.example.json",
-        project_root / "examples" / "bridge-response.example.json": Path(request_dir) / "bridge-response.example.json",
+        project_root / "examples" / "request_idle" / "state.json": Path(request_dir) / "state.example.json",
+        project_root / "examples" / "request_idle" / "response.json": Path(request_dir) / "response.example.json",
     }
 
     copied = 0
