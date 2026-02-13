@@ -108,7 +108,6 @@ namespace OniAiAssistant
 
             TryReloadRuntime(false);
 
-            TryProcessQueuedHttpActions();
 
             if (runtimeHook != null)
             {
@@ -517,6 +516,7 @@ namespace OniAiAssistant
             {
                 var speedControl = SpeedControlScreen.Instance;
                 int previousSpeed = speedControl != null ? Mathf.Clamp(speedControl.GetSpeed(), 1, 3) : 1;
+                bool wasPaused = speedControl != null && speedControl.IsPaused;
 
                 PauseGame(speedControl);
                 yield return new WaitForEndOfFrame();
@@ -531,23 +531,24 @@ namespace OniAiAssistant
                     httpOk = result.Ok;
                 });
 
+                WriteTextSafe(Path.Combine(requestContext.RequestDir, "logs", "bridge_response_raw.txt"), aiResponse ?? string.Empty);
+
                 if (!httpOk)
                 {
                     WriteTextSafe(Path.Combine(requestContext.RequestDir, "bridge_error.txt"), "Request failed or timed out");
                     throw new InvalidOperationException("Bridge request failed or timed out");
                 }
 
-                var executionOutcome = ExecutePlan(aiResponse, requestContext, previousSpeed);
-                if (executionOutcome.KeepPaused)
+                if (wasPaused)
                 {
                     PauseGame(speedControl);
                 }
                 else
                 {
-                    ResumeGame(speedControl, executionOutcome.ResultingSpeed);
+                    ResumeGame(speedControl, previousSpeed);
                 }
 
-                ShowInGameMessage("ONI AI: completed", new Color(0.70f, 1.00f, 0.75f, 1.00f), 2.5f);
+                ShowInGameMessage("ONI AI: request sent", new Color(0.70f, 1.00f, 0.75f, 1.00f), 2.5f);
             }
             finally
             {
@@ -1292,297 +1293,6 @@ namespace OniAiAssistant
             }
         }
 
-        private ExecutionOutcome ExecutePlan(string aiResponse, RequestContext context, int previousSpeed)
-        {
-            WriteTextSafe(Path.Combine(context.RequestDir, "logs", "bridge_response_raw.txt"), aiResponse ?? string.Empty);
-
-            var outcome = new ExecutionOutcome
-            {
-                ResultingSpeed = previousSpeed,
-                KeepPaused = false
-            };
-
-            if (string.IsNullOrWhiteSpace(aiResponse))
-            {
-                WriteTextSafe(Path.Combine(context.RequestDir, "logs", "execution_note.txt"), "Empty response; no actions executed");
-                return outcome;
-            }
-
-            JToken root;
-            try
-            {
-                root = JToken.Parse(aiResponse);
-            }
-            catch (Exception exception)
-            {
-                WriteTextSafe(Path.Combine(context.RequestDir, "logs", "parse_error.txt"), exception.ToString());
-                return outcome;
-            }
-
-            JArray actionArray = ExtractActionArray(root);
-
-            if (actionArray == null)
-            {
-                WriteTextSafe(Path.Combine(context.RequestDir, "logs", "execution_note.txt"), "No actions array in response");
-                return outcome;
-            }
-
-            UpdateLastPlanSnapshot(actionArray);
-
-            var executionLog = new JArray();
-            var canceledActionIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var canceledActionTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var token in actionArray)
-            {
-                if (!(token is JObject actionObject))
-                {
-                    continue;
-                }
-
-                string actionType = ResolveActionType(actionObject);
-                string actionId = ResolveActionId(actionObject);
-                JObject parameters = ResolveActionParameters(actionObject);
-
-                var itemLog = new JObject
-                {
-                    ["id"] = actionId,
-                    ["type"] = actionType,
-                    ["status"] = "ignored",
-                    ["message"] = ""
-                };
-
-                if (canceledActionIds.Contains(actionId) || canceledActionTypes.Contains(actionType))
-                {
-                    itemLog["status"] = "canceled";
-                    itemLog["message"] = "Action canceled by a previous cancel instruction";
-                    executionLog.Add(itemLog);
-                    continue;
-                }
-
-                void FailAction(string message)
-                {
-                    itemLog["status"] = "error";
-                    itemLog["message"] = message;
-                    executionLog.Add(itemLog);
-                    throw new InvalidOperationException("Action " + actionId + " (" + actionType + ") failed: " + message);
-                }
-
-                switch (actionType)
-                {
-                    case "set_speed":
-                    {
-                        int speed = parameters.Value<int?>("speed") ?? 0;
-                        if (speed >= 1 && speed <= 3)
-                        {
-                            outcome.ResultingSpeed = speed;
-                            itemLog["status"] = "applied";
-                            itemLog["message"] = "Speed accepted";
-                        }
-                        else
-                        {
-                            FailAction("Invalid speed; expected 1..3");
-                        }
-
-                        break;
-                    }
-                    case "no_op":
-                    {
-                        itemLog["status"] = "applied";
-                        itemLog["message"] = "No operation";
-                        break;
-                    }
-                    case "pause":
-                    {
-                        outcome.KeepPaused = true;
-                        itemLog["status"] = "applied";
-                        itemLog["message"] = "Game will remain paused after execution";
-                        break;
-                    }
-                    case "resume":
-                    {
-                        outcome.KeepPaused = false;
-                        itemLog["status"] = "applied";
-                        itemLog["message"] = "Game will resume after execution";
-                        break;
-                    }
-                    case "cancel":
-                    {
-                        string targetActionId = (parameters.Value<string>("target_action_id") ?? string.Empty).Trim();
-                        string targetActionType = (parameters.Value<string>("target_action_type") ?? string.Empty).Trim().ToLowerInvariant();
-
-                        bool hasTargetId = !string.IsNullOrEmpty(targetActionId);
-                        bool hasTargetType = !string.IsNullOrEmpty(targetActionType);
-
-                        if (!hasTargetId && !hasTargetType)
-                        {
-                            FailAction("Cancel requires target_action_id or target_action_type");
-                        }
-
-                        if (hasTargetId)
-                        {
-                            canceledActionIds.Add(targetActionId);
-                        }
-
-                        if (hasTargetType)
-                        {
-                            canceledActionTypes.Add(targetActionType);
-                        }
-
-                        itemLog["status"] = "applied";
-                        itemLog["message"] = "Cancel criteria recorded; matching later actions will be skipped";
-                        break;
-                    }
-                    case "build":
-                    {
-                        if (TryApplyBuildAction(parameters, out string message))
-                        {
-                            itemLog["status"] = "applied";
-                            itemLog["message"] = message;
-                        }
-                        else
-                        {
-                            FailAction(message);
-                        }
-
-                        break;
-                    }
-                    case "dig":
-                    {
-                        if (TryApplyDigAction(parameters, out string message))
-                        {
-                            itemLog["status"] = "applied";
-                            itemLog["message"] = message;
-                        }
-                        else
-                        {
-                            FailAction(message);
-                        }
-
-                        break;
-                    }
-                    case "deconstruct":
-                    {
-                        if (TryApplyDeconstructAction(parameters, out string message))
-                        {
-                            itemLog["status"] = "applied";
-                            itemLog["message"] = message;
-                        }
-                        else
-                        {
-                            FailAction(message);
-                        }
-
-                        break;
-                    }
-                    case "priority":
-                    {
-                        if (TryApplyPriorityAction(parameters, out string message))
-                        {
-                            itemLog["status"] = "applied";
-                            itemLog["message"] = message;
-                        }
-                        else
-                        {
-                            FailAction(message);
-                        }
-
-                        break;
-                    }
-                    case "arrangement":
-                    {
-                        if (TryApplyArrangementAction(parameters, out string message))
-                        {
-                            itemLog["status"] = "applied";
-                            itemLog["message"] = message;
-                        }
-                        else
-                        {
-                            FailAction(message);
-                        }
-
-                        break;
-                    }
-                    case "research":
-                    {
-                        if (TryApplyResearchAction(parameters, out string message))
-                        {
-                            itemLog["status"] = "applied";
-                            itemLog["message"] = message;
-                        }
-                        else
-                        {
-                            FailAction(message);
-                        }
-
-                        break;
-                    }
-                    case "set_duplicant_status":
-                    {
-                        if (ApplyDuplicantStatusUpdate(parameters, out string statusMessage))
-                        {
-                            itemLog["status"] = "applied";
-                            itemLog["message"] = statusMessage;
-                        }
-                        else
-                        {
-                            FailAction(statusMessage);
-                        }
-
-                        break;
-                    }
-                    case "set_duplicant_priority":
-                    {
-                        if (ApplyDuplicantPriorityUpdate(parameters, out string priorityMessage))
-                        {
-                            itemLog["status"] = "applied";
-                            itemLog["message"] = priorityMessage;
-                        }
-                        else
-                        {
-                            FailAction(priorityMessage);
-                        }
-
-                        break;
-                    }
-                    case "set_duplicant_skills":
-                    {
-                        if (ApplyDuplicantSkillsUpdate(parameters, out string skillsMessage))
-                        {
-                            itemLog["status"] = "applied";
-                            itemLog["message"] = skillsMessage;
-                        }
-                        else
-                        {
-                            FailAction(skillsMessage);
-                        }
-
-                        break;
-                    }
-                    default:
-                    {
-                        FailAction("Action type not implemented: " + actionType);
-                        break;
-                    }
-                }
-
-                executionLog.Add(itemLog);
-            }
-
-            var executionResult = new JObject
-            {
-                ["resulting_speed"] = outcome.ResultingSpeed,
-                ["keep_paused"] = outcome.KeepPaused,
-                ["actions"] = executionLog
-            };
-
-            UpdateLastExecutionSnapshot(executionResult);
-
-            WriteJsonSafe(Path.Combine(context.RequestDir, "logs", "execution_result.json"), executionResult);
-            Debug.Log("[ONI-AI] Executed plan with " + executionLog.Count + " actions");
-            return outcome;
-        }
-
         private static bool ApplyDuplicantStatusUpdate(JObject parameters, out string message)
         {
             message = "set_duplicant_status requires target duplicant and currently supports params.active boolean";
@@ -1605,7 +1315,7 @@ namespace OniAiAssistant
 
         private static bool ApplyDuplicantPriorityUpdate(JObject parameters, out string message)
         {
-            message = "set_duplicant_priority accepted but ONI runtime mapping is not fully implemented";
+            message = "set_duplicant_priority requires target duplicant and valid priorities map";
             if (!TryResolveTargetDuplicant(parameters, out MonoBehaviour identity))
             {
                 message = "Target duplicant not found for set_duplicant_priority";
@@ -1649,7 +1359,7 @@ namespace OniAiAssistant
                 return true;
             }
 
-            message = "Priority update failed: no compatible runtime priority method found";
+            message = "Priority update failed: unresolved chore group id(s) or runtime call rejected";
             return false;
         }
 
@@ -1756,16 +1466,30 @@ namespace OniAiAssistant
                 return false;
             }
 
-            int applied = ApplyCellMarkAction(digTool, cells, new[]
+            int applied = 0;
+            foreach (int cell in cells)
             {
-                "MarkCell",
-                "MarkForDig",
-                "QueueCell",
-                "TryQueueCell",
-                "AddCell",
-                "TryAddCell",
-                "SelectCell"
-            });
+                bool ok = TryInvokeMethodByName(digTool, "OnDragTool", new object[] { cell, 0 });
+                if (!ok)
+                {
+                    MethodInfo placeDig = digTool.GetType().GetMethod("PlaceDig", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(int), typeof(int) }, null);
+                    if (placeDig != null)
+                    {
+                        try
+                        {
+                            ok = placeDig.Invoke(null, new object[] { cell, 0 }) != null;
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+
+                if (ok)
+                {
+                    applied++;
+                }
+            }
 
             if (applied <= 0)
             {
@@ -1792,16 +1516,15 @@ namespace OniAiAssistant
                 return false;
             }
 
-            int applied = ApplyCellMarkAction(deconstructTool, cells, new[]
+            int applied = 0;
+            foreach (int cell in cells)
             {
-                "MarkCell",
-                "MarkForDeconstruct",
-                "QueueCell",
-                "TryQueueCell",
-                "AddCell",
-                "TryAddCell",
-                "SelectCell"
-            });
+                if (TryInvokeMethodByName(deconstructTool, "DeconstructCell", new object[] { cell })
+                    || TryInvokeMethodByName(deconstructTool, "OnDragTool", new object[] { cell, 0 }))
+                {
+                    applied++;
+                }
+            }
 
             if (applied <= 0)
             {
@@ -1844,7 +1567,27 @@ namespace OniAiAssistant
                 return false;
             }
 
-            bool selected = TryInvokeMethodByName(buildTool, "SetSelectedBuildingDef", new[] { buildingDef })
+            object selectedElements = null;
+            MethodInfo defaultElementsMethod = buildingDef.GetType().GetMethod("DefaultElements", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
+            if (defaultElementsMethod != null)
+            {
+                try
+                {
+                    selectedElements = defaultElementsMethod.Invoke(buildingDef, null);
+                }
+                catch
+                {
+                }
+            }
+
+            if (selectedElements == null)
+            {
+                message = "Building definition could not provide default construction elements for id=" + buildingId;
+                return false;
+            }
+
+            bool selected = TryInvokeMethodByName(buildTool, "Activate", new[] { buildingDef, selectedElements })
+                || TryInvokeMethodByName(buildTool, "SetSelectedBuildingDef", new[] { buildingDef })
                 || TryInvokeMethodByName(buildTool, "SetToolParameter", new[] { buildingDef })
                 || TryInvokeMethodByName(buildTool, "SetBuildingDef", new[] { buildingDef })
                 || TryInvokeMethodByName(buildTool, "SetDef", new[] { buildingDef });
@@ -1855,16 +1598,15 @@ namespace OniAiAssistant
                 return false;
             }
 
-            int applied = ApplyCellMarkAction(buildTool, cells, new[]
+            int applied = 0;
+            foreach (int cell in cells)
             {
-                "TryBuild",
-                "QueueCell",
-                "TryQueueCell",
-                "AddCell",
-                "TryAddCell",
-                "SelectCell",
-                "MarkCell"
-            });
+                if (TryInvokeMethodByName(buildTool, "TryBuild", new object[] { cell })
+                    || TryInvokeMethodByName(buildTool, "OnDragTool", new object[] { cell, 0 }))
+                {
+                    applied++;
+                }
+            }
 
             if (applied <= 0)
             {
@@ -1901,20 +1643,154 @@ namespace OniAiAssistant
                 return false;
             }
 
-            lock (httpSync)
+            var speedControl = SpeedControlScreen.Instance;
+            int resultingSpeed = speedControl != null ? Mathf.Clamp(speedControl.GetSpeed(), 1, 3) : 1;
+            bool keepPaused = false;
+
+            foreach (JObject action in optimizedActions)
             {
-                if (queuedHttpActions == null)
+                string actionType = (action.Value<string>("type") ?? string.Empty).Trim().ToLowerInvariant();
+                JObject actionParams = action["params"] as JObject ?? new JObject();
+
+                if (string.IsNullOrWhiteSpace(actionType))
                 {
-                    queuedHttpActions = new JArray();
+                    message = "arrangement action is missing type";
+                    return false;
                 }
 
-                foreach (JObject actionObject in optimizedActions)
+                if (string.Equals(actionType, "arrangement", StringComparison.Ordinal))
                 {
-                    queuedHttpActions.Add(actionObject.DeepClone());
+                    message = "arrangement cannot contain nested arrangement action";
+                    return false;
+                }
+
+                switch (actionType)
+                {
+                    case "set_speed":
+                    {
+                        int speed = actionParams.Value<int?>("speed") ?? 0;
+                        if (speed < 1 || speed > 3)
+                        {
+                            message = "arrangement set_speed requires speed in [1,3]";
+                            return false;
+                        }
+
+                        resultingSpeed = speed;
+                        break;
+                    }
+                    case "pause":
+                    {
+                        keepPaused = true;
+                        break;
+                    }
+                    case "resume":
+                    {
+                        keepPaused = false;
+                        break;
+                    }
+                    case "no_op":
+                    {
+                        break;
+                    }
+                    case "build":
+                    {
+                        if (!TryApplyBuildAction(actionParams, out string applyMessage))
+                        {
+                            message = applyMessage;
+                            return false;
+                        }
+
+                        break;
+                    }
+                    case "dig":
+                    {
+                        if (!TryApplyDigAction(actionParams, out string applyMessage))
+                        {
+                            message = applyMessage;
+                            return false;
+                        }
+
+                        break;
+                    }
+                    case "deconstruct":
+                    {
+                        if (!TryApplyDeconstructAction(actionParams, out string applyMessage))
+                        {
+                            message = applyMessage;
+                            return false;
+                        }
+
+                        break;
+                    }
+                    case "priority":
+                    {
+                        if (!TryApplyPriorityAction(actionParams, out string applyMessage))
+                        {
+                            message = applyMessage;
+                            return false;
+                        }
+
+                        break;
+                    }
+                    case "research":
+                    {
+                        if (!TryApplyResearchAction(actionParams, out string applyMessage))
+                        {
+                            message = applyMessage;
+                            return false;
+                        }
+
+                        break;
+                    }
+                    case "set_duplicant_status":
+                    {
+                        if (!ApplyDuplicantStatusUpdate(actionParams, out string applyMessage))
+                        {
+                            message = applyMessage;
+                            return false;
+                        }
+
+                        break;
+                    }
+                    case "set_duplicant_priority":
+                    {
+                        if (!ApplyDuplicantPriorityUpdate(actionParams, out string applyMessage))
+                        {
+                            message = applyMessage;
+                            return false;
+                        }
+
+                        break;
+                    }
+                    case "set_duplicant_skills":
+                    {
+                        if (!ApplyDuplicantSkillsUpdate(actionParams, out string applyMessage))
+                        {
+                            message = applyMessage;
+                            return false;
+                        }
+
+                        break;
+                    }
+                    default:
+                    {
+                        message = "arrangement action type not supported: " + actionType;
+                        return false;
+                    }
                 }
             }
 
-            message = "Queued " + optimizedActions.Count.ToString(CultureInfo.InvariantCulture) + " arranged actions; " + optimizeMessage;
+            if (keepPaused)
+            {
+                PauseGame(speedControl);
+            }
+            else
+            {
+                ResumeGame(speedControl, resultingSpeed);
+            }
+
+            UpdateLastPlanSnapshot(JArray.FromObject(optimizedActions));
+            message = "Applied " + optimizedActions.Count.ToString(CultureInfo.InvariantCulture) + " arranged actions; " + optimizeMessage;
             return true;
         }
 
@@ -2266,12 +2142,11 @@ namespace OniAiAssistant
                 return false;
             }
 
-            bool invoked = TryInvokeMethodByName(researchSingleton, "SetActiveResearch", new[] { tech })
-                || TryInvokeMethodByName(researchSingleton, "SetActiveResearch", new object[] { techId })
+            bool invoked = TryInvokeMethodByName(researchSingleton, "SetActiveResearch", new[] { tech, false })
+                || TryInvokeMethodByName(researchSingleton, "SetActiveResearch", new[] { tech, true })
+                || TryInvokeMethodByName(researchSingleton, "SetActiveResearch", new[] { tech })
                 || TryInvokeMethodByName(researchSingleton, "QueueResearch", new[] { tech })
-                || TryInvokeMethodByName(researchSingleton, "QueueResearch", new object[] { techId })
-                || TryInvokeMethodByName(researchSingleton, "SetResearch", new[] { tech })
-                || TryInvokeMethodByName(researchSingleton, "SetResearch", new object[] { techId });
+                || TryInvokeMethodByName(researchSingleton, "SetResearch", new[] { tech });
 
             if (!invoked)
             {
@@ -2402,7 +2277,30 @@ namespace OniAiAssistant
         private static bool TryResolveBuildingDef(string id, out object buildingDef)
         {
             buildingDef = null;
-            if (!TryGetDbCollection("BuildingDefs", out IEnumerable collection))
+            Type assetsType = FindRuntimeType("Assets");
+            if (assetsType == null)
+            {
+                return false;
+            }
+
+            MethodInfo getBuildingDef = assetsType.GetMethod("GetBuildingDef", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
+            if (getBuildingDef != null)
+            {
+                try
+                {
+                    object resolved = getBuildingDef.Invoke(null, new object[] { id });
+                    if (resolved != null)
+                    {
+                        buildingDef = resolved;
+                        return true;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            if (!(TryGetStaticMemberValue(assetsType, "BuildingDefs") is IEnumerable collection))
             {
                 return false;
             }
@@ -2595,12 +2493,106 @@ namespace OniAiAssistant
 
         private static bool TryInvokePriorityMethod(Component resume, string priorityKey, int value)
         {
-            object[] args = { priorityKey, value };
-            if (TryInvokeMethodByName(resume, "SetPriority", args)
-                || TryInvokeMethodByName(resume, "SetPersonalPriority", args)
-                || TryInvokeMethodByName(resume, "SetChoreGroupPriority", args))
+            if (resume == null || resume.gameObject == null || string.IsNullOrWhiteSpace(priorityKey))
+            {
+                return false;
+            }
+
+            Component choreConsumer = FindComponentByTypeName(resume.gameObject, "ChoreConsumer");
+            if (choreConsumer == null)
+            {
+                return false;
+            }
+
+            if (!TryResolveChoreGroup(priorityKey, out object choreGroup))
+            {
+                return false;
+            }
+
+            int clamped = Mathf.Clamp(value, 0, 5);
+            if (TryInvokeMethodByName(choreConsumer, "SetPersonalPriority", new[] { choreGroup, clamped }))
             {
                 return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryResolveChoreGroup(string priorityKey, out object choreGroup)
+        {
+            choreGroup = null;
+            Type dbType = FindRuntimeType("Db");
+            if (dbType == null)
+            {
+                return false;
+            }
+
+            MethodInfo getMethod = dbType.GetMethod("Get", BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);
+            if (getMethod == null)
+            {
+                return false;
+            }
+
+            object db;
+            try
+            {
+                db = getMethod.Invoke(null, null);
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (db == null)
+            {
+                return false;
+            }
+
+            object groups = TryGetMemberValue(db, "ChoreGroups");
+            if (groups == null)
+            {
+                return false;
+            }
+
+            string requested = priorityKey.Trim();
+            MethodInfo tryGet = groups.GetType().GetMethod("TryGet", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(string) }, null);
+            if (tryGet != null)
+            {
+                try
+                {
+                    object direct = tryGet.Invoke(groups, new object[] { requested });
+                    if (direct != null)
+                    {
+                        choreGroup = direct;
+                        return true;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            if (!(TryGetMemberValue(groups, "resources") is IEnumerable resources))
+            {
+                return false;
+            }
+
+            string normalizedRequested = requested.Replace("_", string.Empty).Replace("-", string.Empty).Replace(" ", string.Empty);
+            foreach (object item in resources)
+            {
+                if (item == null)
+                {
+                    continue;
+                }
+
+                string id = (TryGetMemberValue(item, "Id") ?? string.Empty).ToString();
+                string normalizedId = id.Replace("_", string.Empty).Replace("-", string.Empty).Replace(" ", string.Empty);
+                if (string.Equals(id, requested, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(normalizedId, normalizedRequested, StringComparison.OrdinalIgnoreCase))
+                {
+                    choreGroup = item;
+                    return true;
+                }
             }
 
             return false;
@@ -2716,43 +2708,10 @@ namespace OniAiAssistant
             return Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
         }
 
-        private static JArray ExtractActionArray(JToken root)
-        {
-            JArray actionArray = root["actions"] as JArray;
-            if (actionArray == null && root is JArray directArray)
-            {
-                actionArray = directArray;
-            }
 
-            return actionArray;
-        }
 
-        private static string ResolveActionType(JObject actionObject)
-        {
-            string actionType = (actionObject.Value<string>("type") ?? string.Empty).Trim().ToLowerInvariant();
-            if (!string.IsNullOrEmpty(actionType))
-            {
-                return actionType;
-            }
 
-            return (actionObject.Value<string>("action") ?? string.Empty).Trim().ToLowerInvariant();
-        }
 
-        private static string ResolveActionId(JObject actionObject)
-        {
-            string actionId = (actionObject.Value<string>("id") ?? string.Empty).Trim();
-            if (!string.IsNullOrEmpty(actionId))
-            {
-                return actionId;
-            }
-
-            return Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-        }
-
-        private static JObject ResolveActionParameters(JObject actionObject)
-        {
-            return actionObject["params"] as JObject ?? new JObject();
-        }
         private static JObject BuildStatePayload(string requestId, int previousSpeed, string screenshotRelativePath)
         {
             var context = BuildContextObject(previousSpeed);
@@ -2793,7 +2752,6 @@ namespace OniAiAssistant
         private JObject lastStateSnapshot;
         private JObject lastExecutionSnapshot;
         private JArray lastPlannedActions;
-        private JArray queuedHttpActions = new JArray();
 
         private void StartHttpServer()
         {
@@ -2950,25 +2908,32 @@ namespace OniAiAssistant
 
                 if (method.Equals("POST", StringComparison.OrdinalIgnoreCase))
                 {
-                    JObject payload = ReadRequestJsonBody(context.Request);
+                    SpeedRequest payload = ReadRequestBody<SpeedRequest>(context.Request);
                     if (payload == null)
                     {
                         TryWriteJson(context.Response, 400, new JObject { ["error"] = "invalid_json" });
                         return;
                     }
 
-                    int speed = payload.Value<int?>("speed") ?? 0;
+                    int speed = payload.Speed;
                     if (speed < 1 || speed > 3)
                     {
                         TryWriteJson(context.Response, 400, new JObject { ["error"] = "speed_must_be_1_2_3" });
                         return;
                     }
 
-                    QueueControlAction("set_speed", new JObject { ["speed"] = speed }, "http-speed-" + speed.ToString(CultureInfo.InvariantCulture));
+                    var speedControl = SpeedControlScreen.Instance;
+                    if (speedControl == null)
+                    {
+                        throw new InvalidOperationException("SpeedControlScreen unavailable");
+                    }
+
+                    speedControl.SetSpeed(Mathf.Clamp(speed, 1, 3));
                     TryWriteJson(context.Response, 200, new JObject
                     {
-                        ["status"] = "scheduled",
-                        ["speed"] = speed
+                        ["status"] = "applied",
+                        ["speed"] = Mathf.Clamp(speedControl.GetSpeed(), 1, 3),
+                        ["paused"] = speedControl.IsPaused
                     });
                     return;
                 }
@@ -2997,29 +2962,153 @@ namespace OniAiAssistant
 
                 if (method.Equals("POST", StringComparison.OrdinalIgnoreCase))
                 {
-                    JObject payload = ReadRequestJsonBody(context.Request);
+                    PauseRequest payload = ReadRequestBody<PauseRequest>(context.Request);
                     if (payload == null)
                     {
                         TryWriteJson(context.Response, 400, new JObject { ["error"] = "invalid_json" });
                         return;
                     }
 
-                    bool? paused = payload.Value<bool?>("paused");
+                    bool? paused = payload.Paused;
                     if (!paused.HasValue)
                     {
                         TryWriteJson(context.Response, 400, new JObject { ["error"] = "paused_must_be_boolean" });
                         return;
                     }
 
-                    string actionType = paused.Value ? "pause" : "resume";
-                    QueueControlAction(actionType, new JObject(), "http-pause-" + actionType);
+                    var speedControl = SpeedControlScreen.Instance;
+                    if (speedControl == null)
+                    {
+                        throw new InvalidOperationException("SpeedControlScreen unavailable");
+                    }
+
+                    if (paused.Value)
+                    {
+                        PauseGame(speedControl);
+                    }
+                    else
+                    {
+                        ResumeGame(speedControl, Mathf.Clamp(speedControl.GetSpeed(), 1, 3));
+                    }
+
                     TryWriteJson(context.Response, 200, new JObject
                     {
-                        ["status"] = "scheduled",
-                        ["paused"] = paused.Value
+                        ["status"] = "applied",
+                        ["paused"] = speedControl.IsPaused,
+                        ["speed"] = Mathf.Clamp(speedControl.GetSpeed(), 1, 3)
                     });
                     return;
                 }
+            }
+
+            if (method.Equals("POST", StringComparison.OrdinalIgnoreCase) && path.Equals("/build", StringComparison.Ordinal))
+            {
+                JObject payload = ReadRequestBody<JObject>(context.Request);
+                if (payload == null)
+                {
+                    TryWriteJson(context.Response, 400, new JObject { ["error"] = "invalid_json" });
+                    return;
+                }
+
+                if (!TryApplyBuildAction(payload, out string message))
+                {
+                    throw new InvalidOperationException("build failed: " + message);
+                }
+
+                TryWriteJson(context.Response, 200, new JObject
+                {
+                    ["status"] = "applied",
+                    ["message"] = message
+                });
+                return;
+            }
+
+            if (method.Equals("POST", StringComparison.OrdinalIgnoreCase) && path.Equals("/dig", StringComparison.Ordinal))
+            {
+                JObject payload = ReadRequestBody<JObject>(context.Request);
+                if (payload == null)
+                {
+                    TryWriteJson(context.Response, 400, new JObject { ["error"] = "invalid_json" });
+                    return;
+                }
+
+                if (!TryApplyDigAction(payload, out string message))
+                {
+                    throw new InvalidOperationException("dig failed: " + message);
+                }
+
+                TryWriteJson(context.Response, 200, new JObject
+                {
+                    ["status"] = "applied",
+                    ["message"] = message
+                });
+                return;
+            }
+
+            if (method.Equals("POST", StringComparison.OrdinalIgnoreCase) && path.Equals("/deconstruct", StringComparison.Ordinal))
+            {
+                JObject payload = ReadRequestBody<JObject>(context.Request);
+                if (payload == null)
+                {
+                    TryWriteJson(context.Response, 400, new JObject { ["error"] = "invalid_json" });
+                    return;
+                }
+
+                if (!TryApplyDeconstructAction(payload, out string message))
+                {
+                    throw new InvalidOperationException("deconstruct failed: " + message);
+                }
+
+                TryWriteJson(context.Response, 200, new JObject
+                {
+                    ["status"] = "applied",
+                    ["message"] = message
+                });
+                return;
+            }
+
+            if (method.Equals("POST", StringComparison.OrdinalIgnoreCase) && path.Equals("/research", StringComparison.Ordinal))
+            {
+                JObject payload = ReadRequestBody<JObject>(context.Request);
+                if (payload == null)
+                {
+                    TryWriteJson(context.Response, 400, new JObject { ["error"] = "invalid_json" });
+                    return;
+                }
+
+                if (!TryApplyResearchAction(payload, out string message))
+                {
+                    throw new InvalidOperationException("research failed: " + message);
+                }
+
+                TryWriteJson(context.Response, 200, new JObject
+                {
+                    ["status"] = "applied",
+                    ["message"] = message
+                });
+                return;
+            }
+
+            if (method.Equals("POST", StringComparison.OrdinalIgnoreCase) && path.Equals("/arrangement", StringComparison.Ordinal))
+            {
+                JObject payload = ReadRequestBody<JObject>(context.Request);
+                if (payload == null)
+                {
+                    TryWriteJson(context.Response, 400, new JObject { ["error"] = "invalid_json" });
+                    return;
+                }
+
+                if (!TryApplyArrangementAction(payload, out string message))
+                {
+                    throw new InvalidOperationException("arrangement failed: " + message);
+                }
+
+                TryWriteJson(context.Response, 200, new JObject
+                {
+                    ["status"] = "applied",
+                    ["message"] = message
+                });
+                return;
             }
 
             if (method.Equals("GET", StringComparison.OrdinalIgnoreCase) && path.Equals("/state", StringComparison.Ordinal))
@@ -3057,19 +3146,17 @@ namespace OniAiAssistant
             if (method.Equals("GET", StringComparison.OrdinalIgnoreCase) && path.Equals("/plan", StringComparison.Ordinal))
             {
                 JArray planned;
-                JArray queued;
                 JObject execution;
                 lock (httpSync)
                 {
                     planned = lastPlannedActions != null ? (JArray)lastPlannedActions.DeepClone() : new JArray();
-                    queued = queuedHttpActions != null ? (JArray)queuedHttpActions.DeepClone() : new JArray();
                     execution = lastExecutionSnapshot != null ? (JObject)lastExecutionSnapshot.DeepClone() : null;
                 }
 
                 TryWriteJson(context.Response, 200, new JObject
                 {
                     ["planned_actions"] = planned,
-                    ["queued_http_actions"] = queued,
+                    ["queued_http_actions"] = new JArray(),
                     ["last_execution"] = execution,
                     ["pending_actions"] = BuildPendingActionsSnapshot()
                 });
@@ -3100,76 +3187,6 @@ namespace OniAiAssistant
                 return;
             }
 
-            if (path.Equals("/actions", StringComparison.Ordinal))
-            {
-                if (method.Equals("GET", StringComparison.OrdinalIgnoreCase))
-                {
-                    JArray pendingActions = BuildPendingActionsSnapshot();
-                    TryWriteJson(context.Response, 200, new JObject
-                    {
-                        ["actions"] = pendingActions,
-                        ["source"] = "game_pending"
-                    });
-                    return;
-                }
-
-                if (method.Equals("POST", StringComparison.OrdinalIgnoreCase))
-                {
-                    JObject payload = ReadRequestJsonBody(context.Request);
-                    if (payload == null)
-                    {
-                        TryWriteJson(context.Response, 400, new JObject { ["error"] = "invalid_json" });
-                        return;
-                    }
-
-                    JArray incomingActions = payload["actions"] as JArray;
-                    if (incomingActions == null)
-                    {
-                        TryWriteJson(context.Response, 400, new JObject { ["error"] = "actions_must_be_array" });
-                        return;
-                    }
-
-                    int accepted = 0;
-                    int rejected = 0;
-                    lock (httpSync)
-                    {
-                        if (queuedHttpActions == null)
-                        {
-                            queuedHttpActions = new JArray();
-                        }
-
-                        foreach (JToken token in incomingActions)
-                        {
-                            if (!(token is JObject actionObject))
-                            {
-                                continue;
-                            }
-
-                            string actionType = ResolveActionType(actionObject);
-                            if (actionType == "set_speed" || actionType == "pause" || actionType == "resume")
-                            {
-                                rejected++;
-                                continue;
-                            }
-
-                            queuedHttpActions.Add(actionObject.DeepClone());
-                            accepted++;
-                        }
-                    }
-
-                    TryWriteJson(context.Response, 200, new JObject
-                    {
-                        ["accepted"] = accepted,
-                        ["rejected"] = rejected,
-                        ["status"] = "scheduled",
-                        ["note"] = rejected > 0
-                            ? "Use POST /speed and POST /pause for speed/pause control"
-                            : string.Empty
-                    });
-                    return;
-                }
-            }
-
             if (path.Equals("/priorities", StringComparison.Ordinal))
             {
                 if (method.Equals("GET", StringComparison.OrdinalIgnoreCase))
@@ -3184,30 +3201,57 @@ namespace OniAiAssistant
 
                 if (method.Equals("POST", StringComparison.OrdinalIgnoreCase))
                 {
-                    JObject payload = ReadRequestJsonBody(context.Request);
+                    PrioritiesRequest payload = ReadRequestBody<PrioritiesRequest>(context.Request);
                     if (payload == null)
                     {
                         TryWriteJson(context.Response, 400, new JObject { ["error"] = "invalid_json" });
                         return;
                     }
 
-                    JArray incomingPriorities = payload["priorities"] as JArray;
-                    if (incomingPriorities == null)
-                    {
-                        incomingPriorities = payload["updates"] as JArray;
-                    }
-
-                    if (incomingPriorities == null)
+                    List<PriorityUpdateRequest> updates = payload.Priorities ?? payload.Updates;
+                    if (updates == null)
                     {
                         TryWriteJson(context.Response, 400, new JObject { ["error"] = "priorities_must_be_array" });
                         return;
                     }
 
-                    int accepted = QueuePriorityUpdatesAsActions(incomingPriorities);
+                    int accepted = 0;
+                    foreach (PriorityUpdateRequest update in updates)
+                    {
+                        if (update == null || update.Values == null || update.Values.Count == 0)
+                        {
+                            continue;
+                        }
+
+                        var parameters = new JObject
+                        {
+                            ["priorities"] = update.Values.DeepClone()
+                        };
+
+                        string duplicantId = (update.DuplicantId ?? string.Empty).Trim();
+                        if (!string.IsNullOrEmpty(duplicantId))
+                        {
+                            parameters["duplicant_id"] = duplicantId;
+                        }
+
+                        string duplicantName = (update.DuplicantName ?? string.Empty).Trim();
+                        if (!string.IsNullOrEmpty(duplicantName))
+                        {
+                            parameters["duplicant_name"] = duplicantName;
+                        }
+
+                        if (!ApplyDuplicantPriorityUpdate(parameters, out string message))
+                        {
+                            throw new InvalidOperationException("priority update failed: " + message);
+                        }
+
+                        accepted++;
+                    }
+
                     TryWriteJson(context.Response, 200, new JObject
                     {
                         ["accepted"] = accepted,
-                        ["status"] = "scheduled"
+                        ["status"] = "applied"
                     });
                     return;
                 }
@@ -3216,7 +3260,7 @@ namespace OniAiAssistant
             TryWriteJson(context.Response, 404, new JObject { ["error"] = "not_found" });
         }
 
-        private static JObject ReadRequestJsonBody(HttpListenerRequest request)
+        private static T ReadRequestBody<T>(HttpListenerRequest request) where T : class
         {
             try
             {
@@ -3228,7 +3272,7 @@ namespace OniAiAssistant
                         return null;
                     }
 
-                    return JObject.Parse(body);
+                    return JsonConvert.DeserializeObject<T>(body);
                 }
             }
             catch
@@ -3305,9 +3349,62 @@ namespace OniAiAssistant
         private static bool TryBuildBuildingCatalog(out JObject catalog)
         {
             catalog = null;
-            if (!TryGetDbCollection("BuildingDefs", out IEnumerable collection))
+            Type assetsType = FindRuntimeType("Assets");
+            if (assetsType == null)
             {
                 return false;
+            }
+
+            if (!(TryGetStaticMemberValue(assetsType, "BuildingDefs") is IEnumerable collection))
+            {
+                return false;
+            }
+
+            var lockedByTech = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (TryGetDbCollection("Techs", out IEnumerable techCollection))
+            {
+                foreach (object tech in techCollection)
+                {
+                    if (tech == null)
+                    {
+                        continue;
+                    }
+
+                    bool isComplete = false;
+                    MethodInfo isCompleteMethod = tech.GetType().GetMethod("IsComplete", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
+                    if (isCompleteMethod != null)
+                    {
+                        try
+                        {
+                            if (isCompleteMethod.Invoke(tech, null) is bool complete)
+                            {
+                                isComplete = complete;
+                            }
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    if (isComplete)
+                    {
+                        continue;
+                    }
+
+                    if (!(TryGetMemberValue(tech, "unlockedItemIDs") is IEnumerable unlockedItems))
+                    {
+                        continue;
+                    }
+
+                    foreach (object item in unlockedItems)
+                    {
+                        string unlockedId = item?.ToString();
+                        if (!string.IsNullOrWhiteSpace(unlockedId))
+                        {
+                            lockedByTech.Add(unlockedId);
+                        }
+                    }
+                }
             }
 
             var available = new JArray();
@@ -3326,9 +3423,9 @@ namespace OniAiAssistant
                 }
 
                 string name = (TryGetMemberValue(item, "Name") ?? TryGetMemberValue(item, "name") ?? id).ToString();
-                bool unlocked = (TryGetMemberValue(item, "IsUnlocked") as bool?)
-                    ?? (TryGetMemberValue(item, "isUnlocked") as bool?)
-                    ?? false;
+                bool showInBuildMenu = (TryGetMemberValue(item, "ShowInBuildMenu") as bool?) ?? true;
+                bool deprecated = (TryGetMemberValue(item, "Deprecated") as bool?) ?? false;
+                bool unlocked = showInBuildMenu && !deprecated && !lockedByTech.Contains(id);
 
                 var row = new JObject
                 {
@@ -3381,9 +3478,21 @@ namespace OniAiAssistant
                 }
 
                 string name = (TryGetMemberValue(item, "Name") ?? TryGetMemberValue(item, "name") ?? id).ToString();
-                bool unlocked = (TryGetMemberValue(item, "IsComplete") as bool?)
-                    ?? (TryGetMemberValue(item, "isComplete") as bool?)
-                    ?? false;
+                bool unlocked = false;
+                MethodInfo isCompleteMethod = item.GetType().GetMethod("IsComplete", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
+                if (isCompleteMethod != null)
+                {
+                    try
+                    {
+                        if (isCompleteMethod.Invoke(item, null) is bool complete)
+                        {
+                            unlocked = complete;
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
 
                 var row = new JObject
                 {
@@ -3409,7 +3518,8 @@ namespace OniAiAssistant
 
                 if (current != null)
                 {
-                    activeResearchId = (TryGetMemberValue(current, "Id") ?? TryGetMemberValue(current, "ID") ?? current.ToString()).ToString();
+                    object activeTech = TryGetMemberValue(current, "tech") ?? current;
+                    activeResearchId = (TryGetMemberValue(activeTech, "Id") ?? TryGetMemberValue(activeTech, "ID") ?? activeTech.ToString()).ToString();
                 }
             }
 
@@ -3426,44 +3536,6 @@ namespace OniAiAssistant
             };
             return true;
         }
-
-        private void TryProcessQueuedHttpActions()
-        {
-            if (isBusy)
-            {
-                return;
-            }
-
-            JArray actionsToApply = null;
-            lock (httpSync)
-            {
-                if (queuedHttpActions == null || queuedHttpActions.Count == 0)
-                {
-                    return;
-                }
-
-                actionsToApply = (JArray)queuedHttpActions.DeepClone();
-                queuedHttpActions = new JArray();
-            }
-
-            var speedControl = SpeedControlScreen.Instance;
-            int previousSpeed = speedControl != null ? Mathf.Clamp(speedControl.GetSpeed(), 1, 3) : 1;
-            RequestContext context = CreateHttpActionContext();
-            var wrapper = new JObject { ["actions"] = actionsToApply };
-            ExecutionOutcome outcome = ExecutePlan(wrapper.ToString(Newtonsoft.Json.Formatting.None), context, previousSpeed);
-
-            if (outcome.KeepPaused)
-            {
-                PauseGame(speedControl);
-            }
-            else
-            {
-                ResumeGame(speedControl, outcome.ResultingSpeed);
-            }
-
-            Debug.Log("[ONI-AI] Applied queued HTTP actions count=" + actionsToApply.Count);
-        }
-
         private static bool TryReadLiveSpeedControlState(out int speed, out bool paused)
         {
             speed = 1;
@@ -3479,101 +3551,6 @@ namespace OniAiAssistant
             speed = Mathf.Clamp(speedControl.GetSpeed(), 1, 3);
             return true;
         }
-
-        private void QueueControlAction(string actionType, JObject parameters, string actionIdPrefix)
-        {
-            var actionObject = new JObject
-            {
-                ["id"] = actionIdPrefix + "-" + System.DateTime.Now.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture),
-                ["type"] = actionType,
-                ["params"] = parameters ?? new JObject()
-            };
-
-            lock (httpSync)
-            {
-                if (queuedHttpActions == null)
-                {
-                    queuedHttpActions = new JArray();
-                }
-
-                queuedHttpActions.Add(actionObject);
-            }
-        }
-
-        private int QueuePriorityUpdatesAsActions(JArray priorityUpdates)
-        {
-            if (priorityUpdates == null)
-            {
-                return 0;
-            }
-
-            int accepted = 0;
-            lock (httpSync)
-            {
-                if (queuedHttpActions == null)
-                {
-                    queuedHttpActions = new JArray();
-                }
-
-                foreach (JToken token in priorityUpdates)
-                {
-                    if (!(token is JObject updateObject))
-                    {
-                        continue;
-                    }
-
-                    JObject values = updateObject["values"] as JObject;
-                    if (values == null || values.Count == 0)
-                    {
-                        continue;
-                    }
-
-                    var parameters = new JObject
-                    {
-                        ["priorities"] = values.DeepClone()
-                    };
-
-                    string duplicantId = (updateObject.Value<string>("duplicant_id") ?? string.Empty).Trim();
-                    if (!string.IsNullOrEmpty(duplicantId))
-                    {
-                        parameters["duplicant_id"] = duplicantId;
-                    }
-
-                    string duplicantName = (updateObject.Value<string>("duplicant_name") ?? string.Empty).Trim();
-                    if (!string.IsNullOrEmpty(duplicantName))
-                    {
-                        parameters["duplicant_name"] = duplicantName;
-                    }
-
-                    var wrappedAction = new JObject
-                    {
-                        ["id"] = BuildHttpPriorityActionId(duplicantId, duplicantName, accepted),
-                        ["type"] = "set_duplicant_priority",
-                        ["params"] = parameters
-                    };
-
-                    queuedHttpActions.Add(wrappedAction);
-                    accepted++;
-                }
-            }
-
-            return accepted;
-        }
-
-        private static string BuildHttpPriorityActionId(string duplicantId, string duplicantName, int ordinal)
-        {
-            string baseKey = !string.IsNullOrEmpty(duplicantId) ? duplicantId : duplicantName;
-            if (string.IsNullOrWhiteSpace(baseKey))
-            {
-                baseKey = "unknown";
-            }
-
-            string normalized = baseKey.Replace(" ", "_")
-                .Replace(":", "_")
-                .Replace("/", "_");
-            return "http-priority-" + normalized + "-" + ordinal.ToString(CultureInfo.InvariantCulture);
-        }
-
         private RequestContext CreateHttpActionContext()
         {
             string timestamp = System.DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
@@ -3602,11 +3579,37 @@ namespace OniAiAssistant
             public string Response { get; }
         }
 
-        private sealed class ExecutionOutcome
+                        private sealed class SpeedRequest
         {
-            public int ResultingSpeed { get; set; }
+            [JsonProperty("speed")]
+            public int Speed { get; set; }
+        }
 
-            public bool KeepPaused { get; set; }
+        private sealed class PauseRequest
+        {
+            [JsonProperty("paused")]
+            public bool? Paused { get; set; }
+        }
+
+        private sealed class PriorityUpdateRequest
+        {
+            [JsonProperty("duplicant_id")]
+            public string DuplicantId { get; set; }
+
+            [JsonProperty("duplicant_name")]
+            public string DuplicantName { get; set; }
+
+            [JsonProperty("values")]
+            public JObject Values { get; set; }
+        }
+
+        private sealed class PrioritiesRequest
+        {
+            [JsonProperty("priorities")]
+            public List<PriorityUpdateRequest> Priorities { get; set; }
+
+            [JsonProperty("updates")]
+            public List<PriorityUpdateRequest> Updates { get; set; }
         }
 
         private sealed class RequestContext
