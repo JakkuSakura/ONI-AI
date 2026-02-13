@@ -513,48 +513,46 @@ namespace OniAiAssistant
         {
             SetBusyUiState(true);
 
-            var speedControl = SpeedControlScreen.Instance;
-            int previousSpeed = speedControl != null ? Mathf.Clamp(speedControl.GetSpeed(), 1, 3) : 1;
-
-            PauseGame(speedControl);
-            yield return new WaitForEndOfFrame();
-
-            var requestContext = PrepareRequestSnapshot(previousSpeed);
-
-            string aiResponse = string.Empty;
-            bool httpOk = false;
-            yield return SendToBridge(requestContext.PayloadJson, result =>
+            try
             {
-                aiResponse = result.Response;
-                httpOk = result.Ok;
-            });
+                var speedControl = SpeedControlScreen.Instance;
+                int previousSpeed = speedControl != null ? Mathf.Clamp(speedControl.GetSpeed(), 1, 3) : 1;
 
-            int finalSpeed = previousSpeed;
-            bool keepPaused = false;
-            if (httpOk)
-            {
+                PauseGame(speedControl);
+                yield return new WaitForEndOfFrame();
+
+                var requestContext = PrepareRequestSnapshot(previousSpeed);
+
+                string aiResponse = string.Empty;
+                bool httpOk = false;
+                yield return SendToBridge(requestContext.PayloadJson, result =>
+                {
+                    aiResponse = result.Response;
+                    httpOk = result.Ok;
+                });
+
+                if (!httpOk)
+                {
+                    WriteTextSafe(Path.Combine(requestContext.RequestDir, "bridge_error.txt"), "Request failed or timed out");
+                    throw new InvalidOperationException("Bridge request failed or timed out");
+                }
+
                 var executionOutcome = ExecutePlan(aiResponse, requestContext, previousSpeed);
-                finalSpeed = executionOutcome.ResultingSpeed;
-                keepPaused = executionOutcome.KeepPaused;
+                if (executionOutcome.KeepPaused)
+                {
+                    PauseGame(speedControl);
+                }
+                else
+                {
+                    ResumeGame(speedControl, executionOutcome.ResultingSpeed);
+                }
+
                 ShowInGameMessage("ONI AI: completed", new Color(0.70f, 1.00f, 0.75f, 1.00f), 2.5f);
             }
-            else
+            finally
             {
-                Debug.LogWarning("[ONI-AI] Bridge request failed");
-                WriteTextSafe(Path.Combine(requestContext.RequestDir, "bridge_error.txt"), "Request failed or timed out");
-                ShowInGameMessage("ONI AI: bridge unreachable", new Color(1.00f, 0.70f, 0.70f, 1.00f), 4.0f);
+                SetBusyUiState(false);
             }
-
-            if (keepPaused)
-            {
-                PauseGame(speedControl);
-            }
-            else
-            {
-                ResumeGame(speedControl, finalSpeed);
-            }
-
-            SetBusyUiState(false);
         }
 
         private void ShowInGameMessage(string text)
@@ -1362,6 +1360,14 @@ namespace OniAiAssistant
                     continue;
                 }
 
+                void FailAction(string message)
+                {
+                    itemLog["status"] = "error";
+                    itemLog["message"] = message;
+                    executionLog.Add(itemLog);
+                    throw new InvalidOperationException("Action " + actionId + " (" + actionType + ") failed: " + message);
+                }
+
                 switch (actionType)
                 {
                     case "set_speed":
@@ -1375,8 +1381,7 @@ namespace OniAiAssistant
                         }
                         else
                         {
-                            itemLog["status"] = "rejected";
-                            itemLog["message"] = "Invalid speed; expected 1..3";
+                            FailAction("Invalid speed; expected 1..3");
                         }
 
                         break;
@@ -1411,9 +1416,7 @@ namespace OniAiAssistant
 
                         if (!hasTargetId && !hasTargetType)
                         {
-                            itemLog["status"] = "rejected";
-                            itemLog["message"] = "Cancel requires target_action_id or target_action_type";
-                            break;
+                            FailAction("Cancel requires target_action_id or target_action_type");
                         }
 
                         if (hasTargetId)
@@ -1439,8 +1442,7 @@ namespace OniAiAssistant
                         }
                         else
                         {
-                            itemLog["status"] = "rejected";
-                            itemLog["message"] = message;
+                            FailAction(message);
                         }
 
                         break;
@@ -1454,8 +1456,7 @@ namespace OniAiAssistant
                         }
                         else
                         {
-                            itemLog["status"] = "rejected";
-                            itemLog["message"] = message;
+                            FailAction(message);
                         }
 
                         break;
@@ -1469,8 +1470,7 @@ namespace OniAiAssistant
                         }
                         else
                         {
-                            itemLog["status"] = "rejected";
-                            itemLog["message"] = message;
+                            FailAction(message);
                         }
 
                         break;
@@ -1484,8 +1484,7 @@ namespace OniAiAssistant
                         }
                         else
                         {
-                            itemLog["status"] = "rejected";
-                            itemLog["message"] = message;
+                            FailAction(message);
                         }
 
                         break;
@@ -1499,8 +1498,7 @@ namespace OniAiAssistant
                         }
                         else
                         {
-                            itemLog["status"] = "rejected";
-                            itemLog["message"] = message;
+                            FailAction(message);
                         }
 
                         break;
@@ -1514,8 +1512,7 @@ namespace OniAiAssistant
                         }
                         else
                         {
-                            itemLog["status"] = "rejected";
-                            itemLog["message"] = message;
+                            FailAction(message);
                         }
 
                         break;
@@ -1529,8 +1526,7 @@ namespace OniAiAssistant
                         }
                         else
                         {
-                            itemLog["status"] = "deferred";
-                            itemLog["message"] = statusMessage;
+                            FailAction(statusMessage);
                         }
 
                         break;
@@ -1544,8 +1540,7 @@ namespace OniAiAssistant
                         }
                         else
                         {
-                            itemLog["status"] = "deferred";
-                            itemLog["message"] = priorityMessage;
+                            FailAction(priorityMessage);
                         }
 
                         break;
@@ -1559,16 +1554,14 @@ namespace OniAiAssistant
                         }
                         else
                         {
-                            itemLog["status"] = "deferred";
-                            itemLog["message"] = skillsMessage;
+                            FailAction(skillsMessage);
                         }
 
                         break;
                     }
                     default:
                     {
-                        itemLog["status"] = "unsupported";
-                        itemLog["message"] = "Action type not yet implemented in executor";
+                        FailAction("Action type not implemented: " + actionType);
                         break;
                     }
                 }
@@ -1656,7 +1649,7 @@ namespace OniAiAssistant
                 return true;
             }
 
-            message = "Priority update deferred: no compatible runtime priority method found";
+            message = "Priority update failed: no compatible runtime priority method found";
             return false;
         }
 
@@ -1704,7 +1697,7 @@ namespace OniAiAssistant
                 return true;
             }
 
-            message = "Skill update deferred: no compatible runtime skill method found";
+            message = "Skill update failed: no compatible runtime skill method found";
             return false;
         }
 
@@ -3136,29 +3129,22 @@ namespace OniAiAssistant
                 queuedHttpActions = new JArray();
             }
 
-            try
-            {
-                var speedControl = SpeedControlScreen.Instance;
-                int previousSpeed = speedControl != null ? Mathf.Clamp(speedControl.GetSpeed(), 1, 3) : 1;
-                RequestContext context = CreateHttpActionContext();
-                var wrapper = new JObject { ["actions"] = actionsToApply };
-                ExecutionOutcome outcome = ExecutePlan(wrapper.ToString(Newtonsoft.Json.Formatting.None), context, previousSpeed);
+            var speedControl = SpeedControlScreen.Instance;
+            int previousSpeed = speedControl != null ? Mathf.Clamp(speedControl.GetSpeed(), 1, 3) : 1;
+            RequestContext context = CreateHttpActionContext();
+            var wrapper = new JObject { ["actions"] = actionsToApply };
+            ExecutionOutcome outcome = ExecutePlan(wrapper.ToString(Newtonsoft.Json.Formatting.None), context, previousSpeed);
 
-                if (outcome.KeepPaused)
-                {
-                    PauseGame(speedControl);
-                }
-                else
-                {
-                    ResumeGame(speedControl, outcome.ResultingSpeed);
-                }
-
-                Debug.Log("[ONI-AI] Applied queued HTTP actions count=" + actionsToApply.Count);
-            }
-            catch (Exception exception)
+            if (outcome.KeepPaused)
             {
-                Debug.LogWarning("[ONI-AI] Failed to apply queued HTTP actions: " + exception.Message);
+                PauseGame(speedControl);
             }
+            else
+            {
+                ResumeGame(speedControl, outcome.ResultingSpeed);
+            }
+
+            Debug.Log("[ONI-AI] Applied queued HTTP actions count=" + actionsToApply.Count);
         }
 
         private static bool TryReadLiveSpeedControlState(out int speed, out bool paused)
