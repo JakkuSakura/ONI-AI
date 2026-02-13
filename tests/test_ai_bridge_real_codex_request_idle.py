@@ -38,7 +38,7 @@ def test_call_codex_exec_with_request_idle_fixture() -> None:
     os.environ["ONI_AI_PROMPT"] = (
         "You are validating ONI bridge behavior from fixture data. "
         "Read state.json and use it as the single source of truth. "
-        "Return ONLY valid JSON matching bridge-response.schema.json. "
+        "Return ONLY valid JSON with top-level key actions. "
         "Return 3-8 meaningful survival actions, not a trivial single set_speed action, "
         "unless emergency and explained in notes."
     )

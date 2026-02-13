@@ -55,6 +55,95 @@
       }
     }
   ],
+  "runtime_config": {
+    "unity_version": "2021.3.39f1",
+    "platform": "OSXPlayer",
+    "target_frame_rate": -1,
+    "product_name": "Oxygen Not Included",
+    "version": "U55-678078",
+    "scene_count": 2
+  },
+  "assemblies": [
+    {
+      "name": "Assembly-CSharp",
+      "version": "0.0.0.0"
+    },
+    {
+      "name": "UnityEngine.CoreModule",
+      "version": "0.0.0.0"
+    },
+    {
+      "name": "Newtonsoft.Json",
+      "version": "13.0.0.0"
+    }
+  ],
+  "scenes": [
+    {
+      "index": 0,
+      "name": "Main",
+      "is_loaded": true,
+      "root_count": 2,
+      "roots": [
+        {
+          "name": "Game",
+          "active": true,
+          "child_count": 5,
+          "components": [
+            "Game",
+            "KMonoBehaviour"
+          ]
+        },
+        {
+          "name": "OverlayCanvas",
+          "active": true,
+          "child_count": 22,
+          "components": [
+            "Canvas",
+            "GraphicRaycaster"
+          ]
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "name": "ClusterManager",
+      "is_loaded": true,
+      "root_count": 1,
+      "roots": [
+        {
+          "name": "WorldContainer",
+          "active": true,
+          "child_count": 3,
+          "components": [
+            "Transform",
+            "ClusterManager"
+          ]
+        }
+      ]
+    }
+  ],
+  "singletons": [
+    {
+      "type": "SpeedControlScreen",
+      "summary": {
+        "object_type": "SpeedControlScreen",
+        "values": {
+          "IsPaused": true,
+          "CurrentSpeed": 1
+        }
+      }
+    },
+    {
+      "type": "GameClock",
+      "summary": {
+        "object_type": "GameClock",
+        "values": {
+          "Cycle": 42,
+          "TimeInCycle": 312.6
+        }
+      }
+    }
+  ],
   "world": {
     "world_id": 0,
     "biome": "Temperate",

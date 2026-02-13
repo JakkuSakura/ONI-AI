@@ -28,4 +28,5 @@ markers = [
   "real_codex: runs codex exec against realistic snapshot payload",
   "hot_reload: runs ONI runtime hot-reload integration watcher test",
   "integration: runs local bridge integration tests",
+  "oni_live: runs against live ONI C# HTTP server (game must be open and paused)",
 ]

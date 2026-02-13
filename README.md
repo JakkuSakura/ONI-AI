@@ -128,8 +128,8 @@ ONI-side HTTP endpoints:
 
 - `GET /health` -> basic liveness and busy status
 - `GET /state` -> latest captured state plus last execution summary
-- `GET /actions` -> currently queued HTTP actions
-- `POST /actions` -> enqueue actions (`{"actions":[...]}`), applied on game main thread
+- `GET /actions` -> current game pending actions (what duplicants can work on)
+- `POST /actions` -> submit actions (`{"actions":[...]}`), scheduled on game main thread and then reflected as pending work
 
 Codex endpoint discovery is driven by staged OpenAPI spec: `openapi.yaml`.
 

@@ -42,7 +42,6 @@ def test_build_prompt_mentions_screenshot_flag() -> None:
 
     assert "screenshot.png is available." in prompt_with_image
     assert "screenshot.png is not available." in prompt_without_image
-    assert "bridge-response.schema.json" in prompt_with_image
     assert "api_base_url=http://127.0.0.1:8766" in prompt_with_image
     assert "set_duplicant_priority" in prompt_with_image
     assert "Do not run broad exploratory shell scans" in prompt_with_image
@@ -76,13 +75,9 @@ def test_call_codex_exec_uses_stubbed_command(tmp_path: Path) -> None:
 
     assert parsed["actions"][0]["params"]["speed"] == 1
     assert "--skip-git-repo-check" in args_file.read_text(encoding="utf-8")
-    assert "--output-schema" in args_file.read_text(encoding="utf-8")
     args_text = args_file.read_text(encoding="utf-8")
-    assert "--output-schema" in args_text
     assert "-o" in args_text
     assert (request_dir / "logs" / "codex_stdout.txt").exists()
-    assert (request_dir / "bridge-request.schema.json").exists()
-    assert (request_dir / "bridge-response.schema.json").exists()
     assert (request_dir / "openapi.yaml").exists()
     assert (request_dir / "state.example.json").exists()
     assert (request_dir / "response.example.json").exists()

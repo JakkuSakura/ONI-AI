@@ -182,10 +182,10 @@ def build_prompt(payload: dict, has_screenshot: bool) -> str:
             "You are an ONI survival operations planner. "
             "Primary objective: keep duplicants alive (oxygen, food, temperature safety, no idle-critical failures). "
             "Secondary objective: stabilize and improve colony reliability. "
-            "Use local references: ./bridge-request.schema.json, ./bridge-response.schema.json, and ./openapi.yaml. "
+            "Use local reference: ./openapi.yaml. "
             "Read the schema directly to understand all supported actions and required fields. "
             "Before planning, fetch live game state from ONI HTTP APIs. "
-            "Output MUST be valid JSON matching bridge-response.schema.json. "
+            "Output MUST be valid JSON with top-level keys: analysis, suggestions, actions, notes. "
             "Return a meaningful prioritized plan with 3-8 actions by default. "
             "Do NOT return a trivial single-action plan (for example only set_speed) unless there is a clear emergency reason; "
             "if so, explain that reason in notes. "
@@ -267,8 +267,6 @@ def copy_reference_assets_to_request_dir(request_dir: str, request_tag: str) -> 
     project_root = Path(__file__).resolve().parents[2]
 
     source_to_target = {
-        project_root / "schemas" / "bridge-request.schema.json": Path(request_dir) / "bridge-request.schema.json",
-        project_root / "schemas" / "bridge-response.schema.json": Path(request_dir) / "bridge-response.schema.json",
         project_root / "schemas" / "openapi.yaml": Path(request_dir) / "openapi.yaml",
         project_root / "examples" / "request_idle" / "state.json": Path(request_dir) / "state.example.json",
         project_root / "examples" / "request_idle" / "response.json": Path(request_dir) / "response.example.json",
@@ -345,7 +343,6 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
     has_screenshot = wait_for_screenshot(request_dir, payload, request_tag)
     logs_dir = Path(request_dir) / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    schema_path = Path(request_dir) / "bridge-response.schema.json"
     last_message_path = logs_dir / "codex_last_message.json"
 
     LOGGER.info(
@@ -360,7 +357,7 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
 
     prompt = build_prompt(payload, has_screenshot)
     LOGGER.debug("request=%s prompt_preview=%s", request_tag, preview_text(prompt, 500))
-    command = [*codex_cmd_parts, "exec", "--output-schema", str(schema_path), "-o", str(last_message_path)]
+    command = [*codex_cmd_parts, "exec", "-o", str(last_message_path)]
     if skip_git_repo_check:
         command.append("--skip-git-repo-check")
     command.append(prompt)
