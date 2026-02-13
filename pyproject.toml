@@ -1,0 +1,26 @@
+[project]
+name = "oni-ai-bridge"
+version = "0.1.0"
+description = "Local bridge service for ONI AI Assistant"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+oni-ai-bridge = "oni_ai_bridge.ai_bridge:main"
+
+[build-system]
+requires = ["uv_build>=0.7.0,<0.8.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
