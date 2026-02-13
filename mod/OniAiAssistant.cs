@@ -531,7 +531,12 @@ namespace OniAiAssistant
                     httpOk = result.Ok;
                 });
 
-                WriteTextSafe(Path.Combine(requestContext.RequestDir, "logs", "bridge_response_raw.txt"), aiResponse ?? string.Empty);
+                if (aiResponse == null)
+                {
+                    throw new InvalidOperationException("Bridge response is null");
+                }
+
+                WriteTextSafe(Path.Combine(requestContext.RequestDir, "logs", "bridge_response_raw.txt"), aiResponse);
 
                 if (!httpOk)
                 {
@@ -1007,8 +1012,7 @@ namespace OniAiAssistant
                 Component choreConsumer = FindComponentByTypeName(behaviour.gameObject, "ChoreConsumer");
                 if (choreConsumer != null)
                 {
-                    object choreList = GetMemberValue(choreConsumer, "chores")
-                        ?? GetMemberValue(choreConsumer, "availableChores");
+                    object choreList = GetMemberValue(choreConsumer, "chores");
                     JToken choreToken = ConvertToJToken(choreList, 2);
                     if (choreToken != null)
                     {
@@ -1098,9 +1102,7 @@ namespace OniAiAssistant
                 return priority;
             }
 
-            object priorities = GetMemberValue(minionResume, "personalPriorities")
-                ?? GetMemberValue(minionResume, "priorityTable")
-                ?? GetMemberValue(minionResume, "chorePriorities");
+            object priorities = GetMemberValue(minionResume, "personalPriorities");
 
             JToken token = ConvertToJToken(priorities, 2);
             if (token != null && token.Type == JTokenType.Object)
@@ -1119,10 +1121,7 @@ namespace OniAiAssistant
                 return new JArray();
             }
 
-            object skills = GetMemberValue(minionResume, "MasteredSkillIDs")
-                ?? GetMemberValue(minionResume, "masteredSkills")
-                ?? GetMemberValue(minionResume, "skillAptitudes")
-                ?? GetMemberValue(minionResume, "Skills");
+            object skills = GetMemberValue(minionResume, "MasteredSkillIDs");
 
             JToken token = ConvertToJToken(skills, 2);
             if (token != null && token.Type == JTokenType.Array)
@@ -1736,7 +1735,13 @@ namespace OniAiAssistant
                     continue;
                 }
 
-                string itemId = (GetMemberValue(item, "PrefabID") ?? GetMemberValue(item, "ID") ?? string.Empty).ToString();
+                object itemIdValue = GetMemberValue(item, "PrefabID");
+                if (itemIdValue == null)
+                {
+                    continue;
+                }
+
+                string itemId = itemIdValue.ToString();
                 if (string.Equals(itemId, id, StringComparison.OrdinalIgnoreCase))
                 {
                     buildingDef = item;
@@ -1762,7 +1767,13 @@ namespace OniAiAssistant
                     continue;
                 }
 
-                string itemId = (GetMemberValue(item, "Id") ?? GetMemberValue(item, "ID") ?? string.Empty).ToString();
+                object itemIdValue = GetMemberValue(item, "Id");
+                if (itemIdValue == null)
+                {
+                    continue;
+                }
+
+                string itemId = itemIdValue.ToString();
                 if (string.Equals(itemId, id, StringComparison.OrdinalIgnoreCase))
                 {
                     tech = item;
@@ -1797,7 +1808,7 @@ namespace OniAiAssistant
 
             if (db == null)
             {
-                db = GetStaticMemberValue(dbType, "Instance") ?? GetStaticMemberValue(dbType, "instance");
+                db = GetStaticMemberValue(dbType, "Instance");
             }
 
             if (db == null)
@@ -1817,7 +1828,7 @@ namespace OniAiAssistant
                 return true;
             }
 
-            object resources = GetMemberValue(raw, "resources") ?? GetMemberValue(raw, "Resources") ?? GetMemberValue(raw, "items");
+            object resources = GetMemberValue(raw, "resources");
             if (resources is IEnumerable nested)
             {
                 collection = nested;
@@ -1841,9 +1852,7 @@ namespace OniAiAssistant
                 return false;
             }
 
-            instance = GetStaticMemberValue(runtimeType, "Instance")
-                ?? GetStaticMemberValue(runtimeType, "instance")
-                ?? GetStaticMemberValue(runtimeType, "Inst");
+            instance = GetStaticMemberValue(runtimeType, "Instance");
             if (instance != null)
             {
                 return true;
@@ -2009,7 +2018,13 @@ namespace OniAiAssistant
                     continue;
                 }
 
-                string id = (GetMemberValue(item, "Id") ?? string.Empty).ToString();
+                object idValue = GetMemberValue(item, "Id");
+                if (idValue == null)
+                {
+                    continue;
+                }
+
+                string id = idValue.ToString();
                 string normalizedId = id.Replace("_", string.Empty).Replace("-", string.Empty).Replace(" ", string.Empty);
                 if (string.Equals(id, requested, StringComparison.OrdinalIgnoreCase)
                     || string.Equals(normalizedId, normalizedRequested, StringComparison.OrdinalIgnoreCase))
@@ -2119,7 +2134,12 @@ namespace OniAiAssistant
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
-                File.WriteAllText(path, text ?? string.Empty);
+                if (text == null)
+                {
+                    throw new InvalidOperationException("WriteTextSafe requires non-null text");
+                }
+
+                File.WriteAllText(path, text);
             }
             catch (Exception exception)
             {
@@ -2284,7 +2304,11 @@ namespace OniAiAssistant
         private void HandleHttpRequest(HttpListenerContext context)
         {
             string path = context.Request.Url != null ? context.Request.Url.AbsolutePath : "/";
-            string method = context.Request.HttpMethod ?? "GET";
+            string method = context.Request.HttpMethod;
+            if (method == null)
+            {
+                throw new InvalidOperationException("HTTP request missing method");
+            }
 
             if (method.Equals("GET", StringComparison.OrdinalIgnoreCase) && path.Equals("/health", StringComparison.Ordinal))
             {
@@ -2573,7 +2597,7 @@ namespace OniAiAssistant
                         return;
                     }
 
-                    List<PriorityUpdateRequest> updates = payload.Priorities ?? payload.Updates;
+                    List<PriorityUpdateRequest> updates = payload.Priorities;
                     if (updates == null)
                     {
                         WriteJsonResponse(context.Response, 400, new JObject { ["error"] = "priorities_must_be_array" });
@@ -2593,16 +2617,10 @@ namespace OniAiAssistant
                             ["priorities"] = update.Values.DeepClone()
                         };
 
-                        string duplicantId = (update.DuplicantId ?? string.Empty).Trim();
+                        string duplicantId = update.DuplicantId?.Trim();
                         if (!string.IsNullOrEmpty(duplicantId))
                         {
                             parameters["duplicant_id"] = duplicantId;
-                        }
-
-                        string duplicantName = (update.DuplicantName ?? string.Empty).Trim();
-                        if (!string.IsNullOrEmpty(duplicantName))
-                        {
-                            parameters["duplicant_name"] = duplicantName;
                         }
 
                         ApplyDuplicantPriorityUpdate(parameters);
@@ -2625,7 +2643,13 @@ namespace OniAiAssistant
         {
             try
             {
-                using (var reader = new StreamReader(request.InputStream, request.ContentEncoding ?? Encoding.UTF8))
+                Encoding encoding = request.ContentEncoding;
+                if (encoding == null)
+                {
+                    throw new InvalidOperationException("HTTP request missing ContentEncoding");
+                }
+
+                using (var reader = new StreamReader(request.InputStream, encoding))
                 {
                     string body = reader.ReadToEnd();
                     if (string.IsNullOrWhiteSpace(body))
@@ -2751,22 +2775,48 @@ namespace OniAiAssistant
                     continue;
                 }
 
-                string id = (GetMemberValue(item, "PrefabID") ?? GetMemberValue(item, "ID") ?? string.Empty).ToString();
+                object idValue = GetMemberValue(item, "PrefabID");
+                if (idValue == null)
+                {
+                    continue;
+                }
+
+                string id = idValue.ToString();
                 if (string.IsNullOrWhiteSpace(id))
                 {
                     continue;
                 }
 
-                string name = (GetMemberValue(item, "Name") ?? GetMemberValue(item, "name") ?? id).ToString();
-                bool showInBuildMenu = (GetMemberValue(item, "ShowInBuildMenu") as bool?) ?? true;
-                bool deprecated = (GetMemberValue(item, "Deprecated") as bool?) ?? false;
+                object nameValue = GetMemberValue(item, "Name");
+                if (nameValue == null)
+                {
+                    continue;
+                }
+
+                string name = nameValue.ToString();
+                if (!(GetMemberValue(item, "ShowInBuildMenu") is bool showInBuildMenu))
+                {
+                    throw new InvalidOperationException("BuildingDef missing boolean ShowInBuildMenu for id=" + id);
+                }
+
+                if (!(GetMemberValue(item, "Deprecated") is bool deprecated))
+                {
+                    throw new InvalidOperationException("BuildingDef missing boolean Deprecated for id=" + id);
+                }
+
                 bool unlocked = showInBuildMenu && !deprecated && !lockedByTech.Contains(id);
+
+                object categoryValue = GetMemberValue(item, "Category");
+                if (categoryValue == null)
+                {
+                    throw new InvalidOperationException("BuildingDef missing Category for id=" + id);
+                }
 
                 var row = new JObject
                 {
                     ["id"] = id,
                     ["name"] = name,
-                    ["category"] = (GetMemberValue(item, "Category") ?? string.Empty).ToString()
+                    ["category"] = categoryValue.ToString()
                 };
 
                 potential.Add(row);
@@ -2806,13 +2856,25 @@ namespace OniAiAssistant
                     continue;
                 }
 
-                string id = (GetMemberValue(item, "Id") ?? GetMemberValue(item, "ID") ?? string.Empty).ToString();
+                object idValue = GetMemberValue(item, "Id");
+                if (idValue == null)
+                {
+                    continue;
+                }
+
+                string id = idValue.ToString();
                 if (string.IsNullOrWhiteSpace(id))
                 {
                     continue;
                 }
 
-                string name = (GetMemberValue(item, "Name") ?? GetMemberValue(item, "name") ?? id).ToString();
+                object nameValue = GetMemberValue(item, "Name");
+                if (nameValue == null)
+                {
+                    continue;
+                }
+
+                string name = nameValue.ToString();
                 bool unlocked = false;
                 MethodInfo isCompleteMethod = item.GetType().GetMethod("IsComplete", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
                 if (isCompleteMethod != null)
@@ -2829,11 +2891,17 @@ namespace OniAiAssistant
                     }
                 }
 
+                object tierValue = GetMemberValue(item, "tier");
+                if (tierValue == null)
+                {
+                    throw new InvalidOperationException("Tech missing tier for id=" + id);
+                }
+
                 var row = new JObject
                 {
                     ["id"] = id,
                     ["name"] = name,
-                    ["tier"] = (GetMemberValue(item, "tier") ?? GetMemberValue(item, "Tier") ?? string.Empty).ToString()
+                    ["tier"] = tierValue.ToString()
                 };
 
                 potential.Add(row);
@@ -2846,15 +2914,19 @@ namespace OniAiAssistant
             string activeResearchId = string.Empty;
             if (GetSingletonByTypeName("Research", out object researchSingleton))
             {
-                object current = GetMemberValue(researchSingleton, "currentResearch")
-                    ?? GetMemberValue(researchSingleton, "CurrentResearch")
-                    ?? GetMemberValue(researchSingleton, "activeResearch")
-                    ?? GetMemberValue(researchSingleton, "ActiveResearch");
+                object current = GetMemberValue(researchSingleton, "currentResearch");
 
                 if (current != null)
                 {
-                    object activeTech = GetMemberValue(current, "tech") ?? current;
-                    activeResearchId = (GetMemberValue(activeTech, "Id") ?? GetMemberValue(activeTech, "ID") ?? activeTech.ToString()).ToString();
+                    object activeTech = GetMemberValue(current, "tech");
+                    if (activeTech != null)
+                    {
+                        object activeResearchIdValue = GetMemberValue(activeTech, "Id");
+                        if (activeResearchIdValue != null)
+                        {
+                            activeResearchId = activeResearchIdValue.ToString();
+                        }
+                    }
                 }
             }
 
@@ -2931,9 +3003,6 @@ namespace OniAiAssistant
             [JsonProperty("duplicant_id")]
             public string DuplicantId { get; set; }
 
-            [JsonProperty("duplicant_name")]
-            public string DuplicantName { get; set; }
-
             [JsonProperty("values")]
             public JObject Values { get; set; }
         }
@@ -2942,9 +3011,6 @@ namespace OniAiAssistant
         {
             [JsonProperty("priorities")]
             public List<PriorityUpdateRequest> Priorities { get; set; }
-
-            [JsonProperty("updates")]
-            public List<PriorityUpdateRequest> Updates { get; set; }
         }
 
         private sealed class RequestContext
