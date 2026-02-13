@@ -1,12 +1,117 @@
 {
   "actions": [
     {
-      "id": "a1",
+      "id": "speed-main",
       "type": "set_speed",
       "params": {
         "speed": 2
       }
+    },
+    {
+      "id": "do-nothing-scan",
+      "type": "no_op"
+    },
+    {
+      "id": "build-oxygen-diffuser",
+      "type": "build",
+      "params": {
+        "building_id": "OxygenDiffuser",
+        "cell": {
+          "x": 22,
+          "y": 16
+        }
+      }
+    },
+    {
+      "id": "dig-algae-pocket",
+      "type": "dig",
+      "params": {
+        "cells": [
+          {
+            "x": 30,
+            "y": 24
+          }
+        ]
+      }
+    },
+    {
+      "id": "deconstruct-ladder",
+      "type": "deconstruct",
+      "params": {
+        "target_id": "ladder_123"
+      }
+    },
+    {
+      "id": "priority-oxygen-line",
+      "type": "priority",
+      "params": {
+        "target_id": "pipe_plan_42",
+        "priority": 7
+      }
+    },
+    {
+      "id": "arrangement-bedroom",
+      "type": "arrangement",
+      "params": {
+        "room_type": "Barracks",
+        "targets": [
+          "cot_a",
+          "cot_b"
+        ]
+      }
+    },
+    {
+      "id": "research-plumbing",
+      "type": "research",
+      "params": {
+        "node_id": "LiquidPiping"
+      }
+    },
+    {
+      "id": "pause-manual",
+      "type": "pause"
+    },
+    {
+      "id": "resume-manual",
+      "type": "resume"
+    },
+    {
+      "id": "cancel-deconstruct",
+      "type": "cancel",
+      "params": {
+        "target_action_id": "deconstruct-ladder"
+      }
+    },
+    {
+      "id": "dup-status-active",
+      "type": "set_duplicant_status",
+      "params": {
+        "duplicant_name": "Ada",
+        "active": true
+      }
+    },
+    {
+      "id": "dup-priority-dig",
+      "type": "set_duplicant_priority",
+      "params": {
+        "duplicant_name": "Ada",
+        "priorities": {
+          "dig": 7,
+          "build": 5
+        }
+      }
+    },
+    {
+      "id": "dup-skills-focus",
+      "type": "set_duplicant_skills",
+      "params": {
+        "duplicant_name": "Ada",
+        "skills": [
+          "ImprovedDigging1",
+          "HardDigging"
+        ]
+      }
     }
   ],
-  "notes": "Insufficient visual certainty for build/dig; keep simulation at normal speed."
+  "notes": "Example payload includes every currently supported schema action type."
 }

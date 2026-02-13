@@ -17,6 +17,19 @@ using UnityEngine.UI;
 
 namespace OniAiAssistant
 {
+    public interface IOniAiRuntime
+    {
+        string RuntimeId { get; }
+
+        void OnAttach(OniAiController controller);
+
+        void OnDetach();
+
+        void OnTick(OniAiController controller);
+
+        bool HandleTrigger(OniAiController controller);
+    }
+
     public sealed class OniAiAssistantMod : UserMod2
     {
         public override void OnLoad(Harmony harmony)
@@ -40,6 +53,23 @@ namespace OniAiAssistant
     {
         private const string ButtonIdleText = "ONI AI Request";
         private const string ButtonBusyText = "AI Working...";
+        private static readonly string[] AvailableActionTypes =
+        {
+            "set_speed",
+            "no_op",
+            "build",
+            "dig",
+            "deconstruct",
+            "priority",
+            "arrangement",
+            "research",
+            "pause",
+            "resume",
+            "cancel",
+            "set_duplicant_status",
+            "set_duplicant_priority",
+            "set_duplicant_skills"
+        };
 
         private static OniAiController instance;
 
@@ -53,6 +83,13 @@ namespace OniAiAssistant
         private float messageHideAt;
         private float nextUiAttachAttemptAt;
         private bool loggedButtonAttachFailure;
+        private IOniAiRuntime runtimeHook;
+        private string runtimeDllPath;
+        private long runtimeDllLastWriteTicks;
+        private float nextRuntimeReloadCheckAt;
+        private bool runtimeMissingLogged;
+        private long configLastWriteTicks;
+        private float nextConfigReloadCheckAt;
 
         public static void EnsureInstance()
         {
@@ -69,7 +106,9 @@ namespace OniAiAssistant
         private void Awake()
         {
             config = OniAiConfig.Load();
+            configLastWriteTicks = GetConfigLastWriteTicks();
             TryCreateNativeUiButton();
+            TryReloadRuntime(true);
             Debug.Log("[ONI-AI] Controller initialized");
         }
 
@@ -78,6 +117,22 @@ namespace OniAiAssistant
             if (buttonRoot == null && Time.unscaledTime >= nextUiAttachAttemptAt)
             {
                 TryCreateNativeUiButton();
+            }
+
+            TryReloadConfig(false);
+
+            TryReloadRuntime(false);
+
+            if (runtimeHook != null)
+            {
+                try
+                {
+                    runtimeHook.OnTick(this);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning("[ONI-AI] Runtime OnTick failed: " + exception.Message);
+                }
             }
 
             if (messageCanvasRoot != null && messageCanvasRoot.activeSelf && Time.unscaledTime >= messageHideAt)
@@ -103,8 +158,65 @@ namespace OniAiAssistant
                 return;
             }
 
+            if (runtimeHook != null)
+            {
+                try
+                {
+                    if (runtimeHook.HandleTrigger(this))
+                    {
+                        return;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning("[ONI-AI] Runtime HandleTrigger failed: " + exception.Message);
+                }
+            }
+
+            TriggerDefaultAiRequest();
+        }
+
+        private void OnDestroy()
+        {
+            if (runtimeHook == null)
+            {
+                return;
+            }
+
+            try
+            {
+                runtimeHook.OnDetach();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[ONI-AI] Runtime OnDetach failed during destroy: " + exception.Message);
+            }
+        }
+
+        public void TriggerDefaultAiRequest()
+        {
+            if (isBusy)
+            {
+                return;
+            }
+
             ShowInGameMessage("ONI AI: analyzing colony...");
             StartCoroutine(RunAiCycle());
+        }
+
+        public void PublishInfo(string text)
+        {
+            ShowInGameMessage(text, new Color(0.86f, 0.94f, 1.00f, 1.00f), 2.0f);
+        }
+
+        public void PublishSuccess(string text)
+        {
+            ShowInGameMessage(text, new Color(0.70f, 1.00f, 0.75f, 1.00f), 2.5f);
+        }
+
+        public void PublishError(string text)
+        {
+            ShowInGameMessage(text, new Color(1.00f, 0.70f, 0.70f, 1.00f), 4.0f);
         }
 
         private void TryCreateNativeUiButton()
@@ -226,6 +338,134 @@ namespace OniAiAssistant
             return null;
         }
 
+        private void TryReloadRuntime(bool force)
+        {
+            float interval = Mathf.Clamp(config != null ? config.RuntimeReloadIntervalSeconds : 1.0f, 0.2f, 30.0f);
+            if (!force && Time.unscaledTime < nextRuntimeReloadCheckAt)
+            {
+                return;
+            }
+
+            nextRuntimeReloadCheckAt = Time.unscaledTime + interval;
+
+            string candidatePath = ResolveRuntimeDllPath();
+            if (string.IsNullOrWhiteSpace(candidatePath) || !File.Exists(candidatePath))
+            {
+                if (!runtimeMissingLogged)
+                {
+                    Debug.LogWarning("[ONI-AI] Runtime DLL not found: " + candidatePath);
+                    runtimeMissingLogged = true;
+                }
+
+                return;
+            }
+
+            runtimeMissingLogged = false;
+
+            System.DateTime lastWriteUtc = File.GetLastWriteTimeUtc(candidatePath);
+            long lastWriteTicks = lastWriteUtc.Ticks;
+            if (!force && candidatePath == runtimeDllPath && lastWriteTicks == runtimeDllLastWriteTicks)
+            {
+                return;
+            }
+
+            try
+            {
+                byte[] bytes = File.ReadAllBytes(candidatePath);
+                var assembly = Assembly.Load(bytes);
+                Type runtimeType = assembly
+                    .GetTypes()
+                    .FirstOrDefault(type => typeof(IOniAiRuntime).IsAssignableFrom(type) && !type.IsAbstract && type.IsClass);
+
+                if (runtimeType == null)
+                {
+                    Debug.LogWarning("[ONI-AI] Runtime DLL has no IOniAiRuntime implementation: " + candidatePath);
+                    return;
+                }
+
+                var nextRuntime = (IOniAiRuntime)Activator.CreateInstance(runtimeType);
+
+                if (runtimeHook != null)
+                {
+                    try
+                    {
+                        runtimeHook.OnDetach();
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogWarning("[ONI-AI] Previous runtime OnDetach failed: " + exception.Message);
+                    }
+                }
+
+                runtimeHook = nextRuntime;
+                runtimeDllPath = candidatePath;
+                runtimeDllLastWriteTicks = lastWriteTicks;
+
+                runtimeHook.OnAttach(this);
+                string runtimeId = string.IsNullOrWhiteSpace(runtimeHook.RuntimeId) ? runtimeType.FullName : runtimeHook.RuntimeId;
+                Debug.Log("[ONI-AI] Runtime reloaded: " + runtimeId + " from " + runtimeDllPath);
+                PublishSuccess("ONI AI runtime reloaded");
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[ONI-AI] Runtime reload failed: " + exception);
+                PublishError("ONI AI runtime reload failed");
+            }
+        }
+
+        private void TryReloadConfig(bool force)
+        {
+            const float intervalSeconds = 0.5f;
+            if (!force && Time.unscaledTime < nextConfigReloadCheckAt)
+            {
+                return;
+            }
+
+            nextConfigReloadCheckAt = Time.unscaledTime + intervalSeconds;
+            long currentTicks = GetConfigLastWriteTicks();
+            if (currentTicks <= 0)
+            {
+                return;
+            }
+
+            if (!force && currentTicks == configLastWriteTicks)
+            {
+                return;
+            }
+
+            config = OniAiConfig.Load();
+            configLastWriteTicks = currentTicks;
+            Debug.Log("[ONI-AI] Config reloaded");
+            PublishInfo("ONI AI config reloaded");
+        }
+
+        private long GetConfigLastWriteTicks()
+        {
+            string path = Path.Combine(GetModDirectory(), "oni_ai_config.ini");
+            if (!File.Exists(path))
+            {
+                return 0;
+            }
+
+            return File.GetLastWriteTimeUtc(path).Ticks;
+        }
+
+        private string ResolveRuntimeDllPath()
+        {
+            string configured = config != null ? config.RuntimeDllPath : string.Empty;
+            if (string.IsNullOrWhiteSpace(configured))
+            {
+                return Path.Combine(GetModDirectory(), "runtime", "OniAiRuntime.dll");
+            }
+
+            if (Path.IsPathRooted(configured))
+            {
+                return configured;
+            }
+
+            return Path.GetFullPath(Path.Combine(GetModDirectory(), configured));
+        }
+
         private void SetBusyUiState(bool busy)
         {
             isBusy = busy;
@@ -262,9 +502,12 @@ namespace OniAiAssistant
             });
 
             int finalSpeed = previousSpeed;
+            bool keepPaused = false;
             if (httpOk)
             {
-                finalSpeed = ExecutePlan(aiResponse, requestContext, previousSpeed);
+                var executionOutcome = ExecutePlan(aiResponse, requestContext, previousSpeed);
+                finalSpeed = executionOutcome.ResultingSpeed;
+                keepPaused = executionOutcome.KeepPaused;
                 ShowInGameMessage("ONI AI: completed", new Color(0.70f, 1.00f, 0.75f, 1.00f), 2.5f);
             }
             else
@@ -274,7 +517,15 @@ namespace OniAiAssistant
                 ShowInGameMessage("ONI AI: bridge unreachable", new Color(1.00f, 0.70f, 0.70f, 1.00f), 4.0f);
             }
 
-            ResumeGame(speedControl, finalSpeed);
+            if (keepPaused)
+            {
+                PauseGame(speedControl);
+            }
+            else
+            {
+                ResumeGame(speedControl, finalSpeed);
+            }
+
             SetBusyUiState(false);
         }
 
@@ -397,16 +648,24 @@ namespace OniAiAssistant
             string screenshotPath = Path.Combine(snapshotDir, "screenshot.png");
             ScreenCapture.CaptureScreenshot(screenshotPath);
 
+            string snapshotRelativePath = "snapshot";
+            string screenshotRelativePath = "snapshot/screenshot.png";
+
             var context = BuildContextObject(previousSpeed);
             var requestEnvelope = new JObject
             {
                 ["request_id"] = requestId,
-                ["request_dir"] = requestDir,
-                ["snapshot_dir"] = snapshotDir,
-                ["screenshot_path"] = screenshotPath,
+                ["request_dir"] = ".",
+                ["snapshot_dir"] = snapshotRelativePath,
+                ["screenshot_path"] = screenshotRelativePath,
                 ["requested_at_utc"] = System.DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
-                ["context"] = context
+                ["context"] = context,
+                ["duplicants"] = BuildDuplicantsSnapshot(),
+                ["available_actions"] = BuildAvailableActionsArray()
             };
+
+            JObject bridgePayload = (JObject)requestEnvelope.DeepClone();
+            bridgePayload["request_dir"] = requestDir;
 
             WriteJsonSafe(Path.Combine(requestDir, "request.json"), requestEnvelope);
             WriteJsonSafe(Path.Combine(snapshotDir, "context.json"), context);
@@ -420,7 +679,7 @@ namespace OniAiAssistant
                 RequestId = requestId,
                 RequestDir = requestDir,
                 SnapshotDir = snapshotDir,
-                PayloadJson = requestEnvelope.ToString(Formatting.None)
+                PayloadJson = bridgePayload.ToString(Formatting.None)
             };
         }
 
@@ -662,6 +921,270 @@ namespace OniAiAssistant
             };
         }
 
+        private static JArray BuildAvailableActionsArray()
+        {
+            var actions = new JArray();
+            foreach (string actionType in AvailableActionTypes)
+            {
+                actions.Add(actionType);
+            }
+
+            return actions;
+        }
+
+        private static JArray BuildDuplicantsSnapshot()
+        {
+            var snapshot = new JArray();
+            MonoBehaviour[] behaviours = FindObjectsOfType<MonoBehaviour>();
+            foreach (MonoBehaviour behaviour in behaviours)
+            {
+                if (behaviour == null || behaviour.gameObject == null)
+                {
+                    continue;
+                }
+
+                Type identityType = behaviour.GetType();
+                if (!string.Equals(identityType.Name, "MinionIdentity", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string duplicateId = behaviour.gameObject.GetInstanceID().ToString(CultureInfo.InvariantCulture);
+                string duplicateName = ResolveDuplicantName(behaviour);
+
+                var item = new JObject
+                {
+                    ["id"] = duplicateId,
+                    ["name"] = duplicateName,
+                    ["status"] = BuildDuplicantStatusObject(behaviour),
+                    ["priority"] = BuildDuplicantPriorityObject(behaviour),
+                    ["skills"] = BuildDuplicantSkillsArray(behaviour)
+                };
+
+                snapshot.Add(item);
+            }
+
+            return snapshot;
+        }
+
+        private static string ResolveDuplicantName(MonoBehaviour identity)
+        {
+            object nameFromMethod = TryInvokeNoArg(identity, "GetProperName");
+            if (nameFromMethod is string properName && !string.IsNullOrWhiteSpace(properName))
+            {
+                return properName.Trim();
+            }
+
+            object nameFromProperty = TryGetMemberValue(identity, "name");
+            if (nameFromProperty is string directName && !string.IsNullOrWhiteSpace(directName))
+            {
+                return directName.Trim();
+            }
+
+            return identity.gameObject.name;
+        }
+
+        private static JObject BuildDuplicantStatusObject(MonoBehaviour identity)
+        {
+            var status = new JObject
+            {
+                ["active_self"] = identity.gameObject.activeSelf,
+                ["active_in_hierarchy"] = identity.gameObject.activeInHierarchy
+            };
+
+            Component choreConsumer = FindComponentByTypeName(identity.gameObject, "ChoreConsumer");
+            if (choreConsumer != null)
+            {
+                object chore = TryGetMemberValue(choreConsumer, "chore");
+                if (chore != null)
+                {
+                    status["current_chore"] = chore.ToString();
+                }
+            }
+
+            return status;
+        }
+
+        private static JObject BuildDuplicantPriorityObject(MonoBehaviour identity)
+        {
+            var priority = new JObject();
+            Component minionResume = FindComponentByTypeName(identity.gameObject, "MinionResume");
+            if (minionResume == null)
+            {
+                return priority;
+            }
+
+            object priorities = TryGetMemberValue(minionResume, "personalPriorities")
+                ?? TryGetMemberValue(minionResume, "priorityTable")
+                ?? TryGetMemberValue(minionResume, "chorePriorities");
+
+            JToken token = ConvertToJToken(priorities, 2);
+            if (token != null && token.Type == JTokenType.Object)
+            {
+                return (JObject)token;
+            }
+
+            return priority;
+        }
+
+        private static JArray BuildDuplicantSkillsArray(MonoBehaviour identity)
+        {
+            Component minionResume = FindComponentByTypeName(identity.gameObject, "MinionResume");
+            if (minionResume == null)
+            {
+                return new JArray();
+            }
+
+            object skills = TryGetMemberValue(minionResume, "MasteredSkillIDs")
+                ?? TryGetMemberValue(minionResume, "masteredSkills")
+                ?? TryGetMemberValue(minionResume, "skillAptitudes")
+                ?? TryGetMemberValue(minionResume, "Skills");
+
+            JToken token = ConvertToJToken(skills, 2);
+            if (token != null && token.Type == JTokenType.Array)
+            {
+                return (JArray)token;
+            }
+
+            return new JArray();
+        }
+
+        private static Component FindComponentByTypeName(GameObject gameObject, string typeName)
+        {
+            foreach (Component component in gameObject.GetComponents<Component>())
+            {
+                if (component == null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(component.GetType().Name, typeName, StringComparison.Ordinal))
+                {
+                    return component;
+                }
+            }
+
+            return null;
+        }
+
+        private static object TryInvokeNoArg(object instance, string methodName)
+        {
+            if (instance == null || string.IsNullOrWhiteSpace(methodName))
+            {
+                return null;
+            }
+
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            try
+            {
+                MethodInfo method = instance.GetType().GetMethod(methodName, flags, null, Type.EmptyTypes, null);
+                if (method == null)
+                {
+                    return null;
+                }
+
+                return method.Invoke(instance, null);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static object TryGetMemberValue(object instance, string memberName)
+        {
+            if (instance == null || string.IsNullOrWhiteSpace(memberName))
+            {
+                return null;
+            }
+
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            Type type = instance.GetType();
+
+            try
+            {
+                PropertyInfo property = type.GetProperty(memberName, flags);
+                if (property != null && property.GetIndexParameters().Length == 0)
+                {
+                    return property.GetValue(instance, null);
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                FieldInfo field = type.GetField(memberName, flags);
+                if (field != null)
+                {
+                    return field.GetValue(instance);
+                }
+            }
+            catch
+            {
+            }
+
+            return null;
+        }
+
+        private static JToken ConvertToJToken(object value, int depth)
+        {
+            if (value == null)
+            {
+                return JValue.CreateNull();
+            }
+
+            if (depth <= 0)
+            {
+                return value.ToString();
+            }
+
+            if (value is string || value is bool || value is int || value is long || value is float || value is double || value is decimal)
+            {
+                return JToken.FromObject(value);
+            }
+
+            if (value is IEnumerable enumerable && !(value is IDictionary))
+            {
+                var array = new JArray();
+                int count = 0;
+                foreach (object item in enumerable)
+                {
+                    if (count >= 32)
+                    {
+                        break;
+                    }
+
+                    array.Add(ConvertToJToken(item, depth - 1));
+                    count++;
+                }
+
+                return array;
+            }
+
+            if (value is IDictionary dictionary)
+            {
+                var obj = new JObject();
+                int count = 0;
+                foreach (DictionaryEntry entry in dictionary)
+                {
+                    if (count >= 32)
+                    {
+                        break;
+                    }
+
+                    string key = entry.Key != null ? entry.Key.ToString() : "null";
+                    obj[key] = ConvertToJToken(entry.Value, depth - 1);
+                    count++;
+                }
+
+                return obj;
+            }
+
+            return value.ToString();
+        }
+
         private IEnumerator SendToBridge(string payload, Action<BridgeResult> onComplete)
         {
             var bytes = Encoding.UTF8.GetBytes(payload);
@@ -685,14 +1208,20 @@ namespace OniAiAssistant
             }
         }
 
-        private int ExecutePlan(string aiResponse, RequestContext context, int previousSpeed)
+        private ExecutionOutcome ExecutePlan(string aiResponse, RequestContext context, int previousSpeed)
         {
             WriteTextSafe(Path.Combine(context.RequestDir, "logs", "bridge_response_raw.txt"), aiResponse ?? string.Empty);
+
+            var outcome = new ExecutionOutcome
+            {
+                ResultingSpeed = previousSpeed,
+                KeepPaused = false
+            };
 
             if (string.IsNullOrWhiteSpace(aiResponse))
             {
                 WriteTextSafe(Path.Combine(context.RequestDir, "logs", "execution_note.txt"), "Empty response; no actions executed");
-                return previousSpeed;
+                return outcome;
             }
 
             JToken root;
@@ -703,7 +1232,7 @@ namespace OniAiAssistant
             catch (Exception exception)
             {
                 WriteTextSafe(Path.Combine(context.RequestDir, "logs", "parse_error.txt"), exception.ToString());
-                return previousSpeed;
+                return outcome;
             }
 
             JArray actionArray = root["actions"] as JArray;
@@ -715,11 +1244,12 @@ namespace OniAiAssistant
             if (actionArray == null)
             {
                 WriteTextSafe(Path.Combine(context.RequestDir, "logs", "execution_note.txt"), "No actions array in response");
-                return previousSpeed;
+                return outcome;
             }
 
-            int resultingSpeed = previousSpeed;
             var executionLog = new JArray();
+            var canceledActionIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var canceledActionTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var token in actionArray)
             {
@@ -740,6 +1270,14 @@ namespace OniAiAssistant
                     ["message"] = ""
                 };
 
+                if (canceledActionIds.Contains(actionId) || canceledActionTypes.Contains(actionType))
+                {
+                    itemLog["status"] = "canceled";
+                    itemLog["message"] = "Action canceled by a previous cancel instruction";
+                    executionLog.Add(itemLog);
+                    continue;
+                }
+
                 switch (actionType)
                 {
                     case "set_speed":
@@ -747,7 +1285,7 @@ namespace OniAiAssistant
                         int speed = parameters.Value<int?>("speed") ?? 0;
                         if (speed >= 1 && speed <= 3)
                         {
-                            resultingSpeed = speed;
+                            outcome.ResultingSpeed = speed;
                             itemLog["status"] = "applied";
                             itemLog["message"] = "Speed accepted";
                         }
@@ -766,10 +1304,102 @@ namespace OniAiAssistant
                         break;
                     }
                     case "pause":
+                    {
+                        outcome.KeepPaused = true;
+                        itemLog["status"] = "applied";
+                        itemLog["message"] = "Game will remain paused after execution";
+                        break;
+                    }
                     case "resume":
                     {
-                        itemLog["status"] = "rejected";
-                        itemLog["message"] = "Pause/resume is controlled by mod runtime";
+                        outcome.KeepPaused = false;
+                        itemLog["status"] = "applied";
+                        itemLog["message"] = "Game will resume after execution";
+                        break;
+                    }
+                    case "cancel":
+                    {
+                        string targetActionId = (parameters.Value<string>("target_action_id") ?? string.Empty).Trim();
+                        string targetActionType = (parameters.Value<string>("target_action_type") ?? string.Empty).Trim().ToLowerInvariant();
+
+                        bool hasTargetId = !string.IsNullOrEmpty(targetActionId);
+                        bool hasTargetType = !string.IsNullOrEmpty(targetActionType);
+
+                        if (!hasTargetId && !hasTargetType)
+                        {
+                            itemLog["status"] = "rejected";
+                            itemLog["message"] = "Cancel requires target_action_id or target_action_type";
+                            break;
+                        }
+
+                        if (hasTargetId)
+                        {
+                            canceledActionIds.Add(targetActionId);
+                        }
+
+                        if (hasTargetType)
+                        {
+                            canceledActionTypes.Add(targetActionType);
+                        }
+
+                        itemLog["status"] = "applied";
+                        itemLog["message"] = "Cancel criteria recorded; matching later actions will be skipped";
+                        break;
+                    }
+                    case "build":
+                    case "dig":
+                    case "deconstruct":
+                    case "priority":
+                    case "arrangement":
+                    case "research":
+                    {
+                        itemLog["status"] = "deferred";
+                        itemLog["message"] = "Action acknowledged and logged; executor implementation pending";
+                        break;
+                    }
+                    case "set_duplicant_status":
+                    {
+                        if (ApplyDuplicantStatusUpdate(parameters, out string statusMessage))
+                        {
+                            itemLog["status"] = "applied";
+                            itemLog["message"] = statusMessage;
+                        }
+                        else
+                        {
+                            itemLog["status"] = "deferred";
+                            itemLog["message"] = statusMessage;
+                        }
+
+                        break;
+                    }
+                    case "set_duplicant_priority":
+                    {
+                        if (ApplyDuplicantPriorityUpdate(parameters, out string priorityMessage))
+                        {
+                            itemLog["status"] = "applied";
+                            itemLog["message"] = priorityMessage;
+                        }
+                        else
+                        {
+                            itemLog["status"] = "deferred";
+                            itemLog["message"] = priorityMessage;
+                        }
+
+                        break;
+                    }
+                    case "set_duplicant_skills":
+                    {
+                        if (ApplyDuplicantSkillsUpdate(parameters, out string skillsMessage))
+                        {
+                            itemLog["status"] = "applied";
+                            itemLog["message"] = skillsMessage;
+                        }
+                        else
+                        {
+                            itemLog["status"] = "deferred";
+                            itemLog["message"] = skillsMessage;
+                        }
+
                         break;
                     }
                     default:
@@ -785,13 +1415,264 @@ namespace OniAiAssistant
 
             var executionResult = new JObject
             {
-                ["resulting_speed"] = resultingSpeed,
+                ["resulting_speed"] = outcome.ResultingSpeed,
+                ["keep_paused"] = outcome.KeepPaused,
                 ["actions"] = executionLog
             };
 
             WriteJsonSafe(Path.Combine(context.RequestDir, "logs", "execution_result.json"), executionResult);
             Debug.Log("[ONI-AI] Executed plan with " + executionLog.Count + " actions");
-            return resultingSpeed;
+            return outcome;
+        }
+
+        private static bool ApplyDuplicantStatusUpdate(JObject parameters, out string message)
+        {
+            message = "set_duplicant_status requires target duplicant and currently supports params.active boolean";
+            if (!TryResolveTargetDuplicant(parameters, out MonoBehaviour identity))
+            {
+                return false;
+            }
+
+            if (!parameters.TryGetValue("active", StringComparison.OrdinalIgnoreCase, out JToken activeToken) || activeToken.Type != JTokenType.Boolean)
+            {
+                message = "Target duplicant found, but params.active boolean is missing";
+                return false;
+            }
+
+            bool active = activeToken.Value<bool>();
+            identity.gameObject.SetActive(active);
+            message = "Duplicant active state updated";
+            return true;
+        }
+
+        private static bool ApplyDuplicantPriorityUpdate(JObject parameters, out string message)
+        {
+            message = "set_duplicant_priority accepted but ONI runtime mapping is not fully implemented";
+            if (!TryResolveTargetDuplicant(parameters, out MonoBehaviour identity))
+            {
+                message = "Target duplicant not found for set_duplicant_priority";
+                return false;
+            }
+
+            Component resume = FindComponentByTypeName(identity.gameObject, "MinionResume");
+            if (resume == null)
+            {
+                message = "Target duplicant has no MinionResume component";
+                return false;
+            }
+
+            JToken prioritiesToken = parameters["priorities"];
+            if (!(prioritiesToken is JObject prioritiesObject) || !prioritiesObject.Properties().Any())
+            {
+                message = "params.priorities object is required for set_duplicant_priority";
+                return false;
+            }
+
+            int applied = 0;
+            foreach (JProperty property in prioritiesObject.Properties())
+            {
+                if (property.Value.Type != JTokenType.Integer)
+                {
+                    continue;
+                }
+
+                string key = property.Name;
+                int value = property.Value.Value<int>();
+                bool ok = TryInvokePriorityMethod(resume, key, value);
+                if (ok)
+                {
+                    applied++;
+                }
+            }
+
+            if (applied > 0)
+            {
+                message = "Applied " + applied.ToString(CultureInfo.InvariantCulture) + " priority entries";
+                return true;
+            }
+
+            message = "Priority update deferred: no compatible runtime priority method found";
+            return false;
+        }
+
+        private static bool ApplyDuplicantSkillsUpdate(JObject parameters, out string message)
+        {
+            message = "set_duplicant_skills accepted but ONI runtime mapping is not fully implemented";
+            if (!TryResolveTargetDuplicant(parameters, out MonoBehaviour identity))
+            {
+                message = "Target duplicant not found for set_duplicant_skills";
+                return false;
+            }
+
+            Component resume = FindComponentByTypeName(identity.gameObject, "MinionResume");
+            if (resume == null)
+            {
+                message = "Target duplicant has no MinionResume component";
+                return false;
+            }
+
+            JToken skillsToken = parameters["skills"];
+            if (!(skillsToken is JArray skillsArray) || skillsArray.Count == 0)
+            {
+                message = "params.skills array is required for set_duplicant_skills";
+                return false;
+            }
+
+            int applied = 0;
+            foreach (JToken token in skillsArray)
+            {
+                if (token.Type != JTokenType.String)
+                {
+                    continue;
+                }
+
+                string skillId = token.Value<string>();
+                if (TryInvokeSkillMethod(resume, skillId))
+                {
+                    applied++;
+                }
+            }
+
+            if (applied > 0)
+            {
+                message = "Applied " + applied.ToString(CultureInfo.InvariantCulture) + " skill entries";
+                return true;
+            }
+
+            message = "Skill update deferred: no compatible runtime skill method found";
+            return false;
+        }
+
+        private static bool TryResolveTargetDuplicant(JObject parameters, out MonoBehaviour identity)
+        {
+            identity = null;
+            if (parameters == null)
+            {
+                return false;
+            }
+
+            string targetId = (parameters.Value<string>("duplicant_id") ?? string.Empty).Trim();
+            string targetName = (parameters.Value<string>("duplicant_name") ?? string.Empty).Trim();
+
+            MonoBehaviour[] behaviours = FindObjectsOfType<MonoBehaviour>();
+            foreach (MonoBehaviour behaviour in behaviours)
+            {
+                if (behaviour == null || behaviour.gameObject == null)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(behaviour.GetType().Name, "MinionIdentity", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string candidateId = behaviour.gameObject.GetInstanceID().ToString(CultureInfo.InvariantCulture);
+                string candidateName = ResolveDuplicantName(behaviour);
+
+                bool idMatch = !string.IsNullOrWhiteSpace(targetId) && string.Equals(candidateId, targetId, StringComparison.OrdinalIgnoreCase);
+                bool nameMatch = !string.IsNullOrWhiteSpace(targetName) && string.Equals(candidateName, targetName, StringComparison.OrdinalIgnoreCase);
+
+                if (idMatch || nameMatch)
+                {
+                    identity = behaviour;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryInvokePriorityMethod(Component resume, string priorityKey, int value)
+        {
+            object[] args = { priorityKey, value };
+            if (TryInvokeMethodByName(resume, "SetPriority", args)
+                || TryInvokeMethodByName(resume, "SetPersonalPriority", args)
+                || TryInvokeMethodByName(resume, "SetChoreGroupPriority", args))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryInvokeSkillMethod(Component resume, string skillId)
+        {
+            object[] args = { skillId };
+            if (TryInvokeMethodByName(resume, "AssignSkill", args)
+                || TryInvokeMethodByName(resume, "MasterSkill", args)
+                || TryInvokeMethodByName(resume, "LearnSkill", args))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryInvokeMethodByName(object instance, string methodName, object[] args)
+        {
+            if (instance == null)
+            {
+                return false;
+            }
+
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            MethodInfo[] methods = instance.GetType().GetMethods(flags)
+                .Where(method => string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                .ToArray();
+
+            foreach (MethodInfo method in methods)
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                if (parameters.Length != args.Length)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    object[] converted = new object[args.Length];
+                    bool convertible = true;
+                    for (int index = 0; index < args.Length; index++)
+                    {
+                        object value = args[index];
+                        Type targetType = parameters[index].ParameterType;
+
+                        if (value == null)
+                        {
+                            converted[index] = null;
+                            continue;
+                        }
+
+                        if (targetType.IsInstanceOfType(value))
+                        {
+                            converted[index] = value;
+                            continue;
+                        }
+
+                        if (targetType.IsEnum && value is string enumText)
+                        {
+                            converted[index] = Enum.Parse(targetType, enumText, true);
+                            continue;
+                        }
+
+                        converted[index] = Convert.ChangeType(value, targetType, CultureInfo.InvariantCulture);
+                    }
+
+                    if (!convertible)
+                    {
+                        continue;
+                    }
+
+                    method.Invoke(instance, converted);
+                    return true;
+                }
+                catch
+                {
+                }
+            }
+
+            return false;
         }
 
         private static void WriteJsonSafe(string path, JToken token)
@@ -838,6 +1719,13 @@ namespace OniAiAssistant
             public string Response { get; }
         }
 
+        private sealed class ExecutionOutcome
+        {
+            public int ResultingSpeed { get; set; }
+
+            public bool KeepPaused { get; set; }
+        }
+
         private sealed class RequestContext
         {
             public string RequestId { get; set; }
@@ -861,6 +1749,10 @@ namespace OniAiAssistant
         public int RequestTimeoutSeconds { get; private set; } = 120;
 
         public string RequestRootDir { get; private set; } = string.Empty;
+
+        public string RuntimeDllPath { get; private set; } = string.Empty;
+
+        public float RuntimeReloadIntervalSeconds { get; private set; } = 1.0f;
 
         public static OniAiConfig Load()
         {
@@ -928,6 +1820,21 @@ namespace OniAiAssistant
                 if (key.Equals("request_root_dir", StringComparison.OrdinalIgnoreCase))
                 {
                     config.RequestRootDir = value;
+                    continue;
+                }
+
+                if (key.Equals("runtime_dll_path", StringComparison.OrdinalIgnoreCase))
+                {
+                    config.RuntimeDllPath = value;
+                    continue;
+                }
+
+                if (key.Equals("runtime_reload_interval_seconds", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float intervalSeconds))
+                    {
+                        config.RuntimeReloadIntervalSeconds = Mathf.Clamp(intervalSeconds, 0.2f, 30.0f);
+                    }
                 }
             }
 

@@ -39,7 +39,11 @@
             "arrangement",
             "research",
             "pause",
-            "resume"
+            "resume",
+          "cancel",
+          "set_duplicant_status",
+          "set_duplicant_priority",
+          "set_duplicant_skills"
           ]
         },
         "params": {
@@ -50,6 +54,52 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 3
+            },
+            "target_action_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "target_action_type": {
+              "type": "string",
+              "enum": [
+                "set_speed",
+                "no_op",
+                "build",
+                "dig",
+                "deconstruct",
+                "priority",
+                "arrangement",
+                "research",
+                "pause",
+                "resume",
+                "cancel",
+                "set_duplicant_status",
+                "set_duplicant_priority",
+                "set_duplicant_skills"
+              ]
+            },
+            "duplicant_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "duplicant_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "active": {
+              "type": "boolean"
+            },
+            "priorities": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           }
         }
@@ -66,6 +116,28 @@
             "properties": {
               "params": {
                 "required": ["speed"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": { "const": "cancel" }
+            }
+          },
+          "then": {
+            "required": ["params"],
+            "properties": {
+              "params": {
+                "anyOf": [
+                  {
+                    "required": ["target_action_id"]
+                  },
+                  {
+                    "required": ["target_action_type"]
+                  }
+                ]
               }
             }
           }

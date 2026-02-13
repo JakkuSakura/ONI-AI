@@ -26,4 +26,5 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 markers = [
   "real_codex: runs codex exec against realistic snapshot payload",
+  "hot_reload: runs ONI runtime hot-reload integration watcher test",
 ]

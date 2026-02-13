@@ -1,8 +1,8 @@
 {
   "request_id": "20260213_113310_743_8765",
-  "request_dir": "/Users/jakku/Library/Application Support/unity.Klei.Oxygen Not Included/mods/local/jakku.oni_ai_assistant/requests/20260213_113310_743_8765",
-  "snapshot_dir": "/Users/jakku/Library/Application Support/unity.Klei.Oxygen Not Included/mods/local/jakku.oni_ai_assistant/requests/20260213_113310_743_8765/snapshot",
-  "screenshot_path": "/Users/jakku/Library/Application Support/unity.Klei.Oxygen Not Included/mods/local/jakku.oni_ai_assistant/requests/20260213_113310_743_8765/snapshot/screenshot.png",
+  "request_dir": ".",
+  "snapshot_dir": "snapshot",
+  "screenshot_path": "snapshot/screenshot.png",
   "requested_at_utc": "2026-02-13T11:33:10.7440980Z",
   "context": {
     "cycle": 0,
@@ -13,5 +13,40 @@
     "previous_speed": 2,
     "real_time_since_startup_seconds": 266.868256,
     "unscaled_time_seconds": 266.856537
-  }
+  },
+  "duplicants": [
+    {
+      "id": "17932",
+      "name": "Ada",
+      "status": {
+        "active_self": true,
+        "active_in_hierarchy": true,
+        "current_chore": "Fetch"
+      },
+      "priority": {
+        "dig": 6,
+        "build": 5
+      },
+      "skills": [
+        "ImprovedDigging1",
+        "HardDigging"
+      ]
+    }
+  ],
+  "available_actions": [
+    "set_speed",
+    "no_op",
+    "build",
+    "dig",
+    "deconstruct",
+    "priority",
+    "arrangement",
+    "research",
+    "pause",
+    "resume",
+    "cancel",
+    "set_duplicant_status",
+    "set_duplicant_priority",
+    "set_duplicant_skills"
+  ]
 }

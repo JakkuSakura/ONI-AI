@@ -3,14 +3,30 @@ import json
 import logging
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 
 LOGGER = logging.getLogger("oni_ai_bridge")
+
+
+def is_truthy_env(var_name: str, default: bool) -> bool:
+    raw_value = os.getenv(var_name)
+    if raw_value is None:
+        return default
+
+    value = raw_value.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def configure_logging() -> None:
@@ -106,10 +122,15 @@ def build_prompt(has_screenshot: bool) -> str:
     custom_prompt = os.getenv(
         "ONI_AI_PROMPT",
         (
-            "You are an ONI planning agent. Read all files under ./snapshot and request.json in cwd. "
+            "You are an ONI planning agent. Read request.json (including available_actions and duplicants), all files under ./snapshot, "
+            "and the local reference files ./bridge-request.schema.json, ./bridge-response.schema.json, "
+            "./bridge-request.example.json, ./bridge-response.example.json. "
+            "Your output MUST be valid JSON matching bridge-response.schema.json. "
+            "You may emit any action type allowed by the schema enum, including: "
+            "set_speed, no_op, build, dig, deconstruct, priority, arrangement, research, pause, resume, cancel, "
+            "set_duplicant_status, set_duplicant_priority, set_duplicant_skills. "
             "Return ONLY JSON with this shape: "
             "{\"actions\":[{\"id\":\"a1\",\"type\":\"set_speed\",\"params\":{\"speed\":2}}],\"notes\":\"...\"}. "
-            "Allowed types for now: set_speed, no_op, build, dig, deconstruct, priority, arrangement, research. "
             "For unsupported or uncertain operations, still include them in actions; executor may mark unsupported."
         ),
     )
@@ -156,8 +177,54 @@ def wait_for_screenshot(snapshot_dir: str, request_tag: str) -> bool:
     return False
 
 
+def copy_reference_assets_to_request_dir(request_dir: str, request_tag: str) -> None:
+    project_root = Path(__file__).resolve().parents[2]
+
+    source_to_target = {
+        project_root / "schemas" / "bridge-request.schema.json": Path(request_dir) / "bridge-request.schema.json",
+        project_root / "schemas" / "bridge-response.schema.json": Path(request_dir) / "bridge-response.schema.json",
+        project_root / "examples" / "bridge-request.example.json": Path(request_dir) / "bridge-request.example.json",
+        project_root / "examples" / "bridge-response.example.json": Path(request_dir) / "bridge-response.example.json",
+    }
+
+    copied = 0
+    missing = []
+    for source_path, target_path in source_to_target.items():
+        if not source_path.exists():
+            missing.append(str(source_path))
+            continue
+
+        shutil.copy2(source_path, target_path)
+        copied += 1
+
+    if missing:
+        LOGGER.warning(
+            "request=%s missing reference assets count=%s paths=%s",
+            request_tag,
+            len(missing),
+            missing,
+        )
+
+    LOGGER.info(
+        "request=%s staged reference assets copied=%s request_dir=%s",
+        request_tag,
+        copied,
+        request_dir,
+    )
+
+
 def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
-    codex_cmd = os.getenv("ONI_AI_CODEX_CMD", "codex").strip() or "codex"
+    codex_cmd_raw = os.getenv("ONI_AI_CODEX_CMD", "codex").strip() or "codex"
+    try:
+        codex_cmd_parts = shlex.split(codex_cmd_raw)
+    except ValueError:
+        LOGGER.exception("request=%s invalid ONI_AI_CODEX_CMD=%s", request_tag, codex_cmd_raw)
+        return json.dumps({"actions": []}, ensure_ascii=False)
+
+    if not codex_cmd_parts:
+        codex_cmd_parts = ["codex"]
+
+    skip_git_repo_check = is_truthy_env("ONI_AI_CODEX_SKIP_GIT_REPO_CHECK", True)
     timeout_seconds = int(os.getenv("ONI_AI_CODEX_TIMEOUT_SECONDS", "90"))
 
     request_dir = str(payload.get("request_dir", "")).strip()
@@ -165,21 +232,27 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
         LOGGER.error("request=%s invalid request_dir=%s", request_tag, request_dir)
         return json.dumps({"actions": []}, ensure_ascii=False)
 
+    copy_reference_assets_to_request_dir(request_dir, request_tag)
+
     snapshot_dir = os.path.join(request_dir, "snapshot")
     has_screenshot = wait_for_screenshot(snapshot_dir, request_tag)
 
     LOGGER.info(
-        "request=%s invoking codex cmd=%s timeout=%ss request_dir=%s has_screenshot=%s",
+        "request=%s invoking codex cmd=%s timeout=%ss request_dir=%s has_screenshot=%s skip_git_repo_check=%s",
         request_tag,
-        codex_cmd,
+        shlex.join(codex_cmd_parts),
         timeout_seconds,
         request_dir,
         has_screenshot,
+        skip_git_repo_check,
     )
 
     prompt = build_prompt(has_screenshot)
     LOGGER.debug("request=%s prompt_preview=%s", request_tag, preview_text(prompt, 500))
-    command = [codex_cmd, "exec", prompt]
+    command = [*codex_cmd_parts, "exec"]
+    if skip_git_repo_check:
+        command.append("--skip-git-repo-check")
+    command.append(prompt)
     started_at = time.monotonic()
 
     stdout_chunks: list[str] = []

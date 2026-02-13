@@ -53,6 +53,7 @@ uv run oni-ai-bridge
 Optional env vars:
 
 - `ONI_AI_CODEX_CMD` (default: `codex`)
+- `ONI_AI_CODEX_SKIP_GIT_REPO_CHECK` (default: `1`, adds `--skip-git-repo-check` to `codex exec`)
 - `ONI_AI_CODEX_TIMEOUT_SECONDS` (default: `90`)
 - `ONI_AI_PROMPT` (custom decision prompt for `codex exec`)
 - `ONI_AI_BRIDGE_HOST` (default: `127.0.0.1`)
@@ -61,7 +62,7 @@ Optional env vars:
 - `ONI_AI_SCREENSHOT_WAIT_MS` (default: `500`, wait before `codex exec` for screenshot flush)
 - `ONI_AI_SCREENSHOT_POLL_MS` (default: `50`, poll interval while waiting for screenshot)
 
-The bridge writes request data to a temp directory (`request.json`, `context.json`, optional `screenshot.png`) and invokes `codex exec` there, then parses the output into ONI actions.
+The bridge writes request data to a temp directory (`request.json`, `context.json`, optional `screenshot.png`), with `request.json` carrying relative snapshot paths plus `available_actions` and duplicant snapshots (`status`, `priority`, `skills`). It stages `schemas/*` and `examples/*` references into that request directory, invokes `codex exec` there, then parses the output into ONI actions.
 
 By default, mod requests are written under system tmp:
 
@@ -85,7 +86,37 @@ ONI_AI_LOG_LEVEL=DEBUG uv run oni-ai-bridge
 Optional hotkey:
 
 - Configure `enable_hotkey=true` in `oni_ai_config.ini`.
-- Use `hotkey=F8` (or another `UnityEngine.KeyCode` value).
+- Use `hotkey=BackQuote` (or another `UnityEngine.KeyCode` value).
+
+## Hot Reload (while game is running)
+
+The mod host supports runtime DLL and config hot-reload without restarting ONI.
+
+### Runtime code hot-reload
+
+1. Keep ONI running.
+2. Start watcher in this repo:
+
+```bash
+cd ~/Dev/ONI-AI
+./scripts/hot_reload_runtime.sh
+```
+
+3. Edit `runtime/OniAiRuntime.cs`.
+4. On save, the script rebuilds and copies `OniAiRuntime.dll` to the installed mod runtime directory.
+5. The host mod reloads it automatically (default check interval: 1s).
+
+### Config hot-reload
+
+- Edit installed config file while ONI is running:
+  - `~/Library/Application Support/unity.Klei.Oxygen Not Included/mods/local/jakku.oni_ai_assistant/oni_ai_config.ini`
+- The mod polls for config file changes and reloads in runtime.
+
+Useful config keys for runtime reload:
+
+- `runtime_dll_path` (default empty -> `runtime/OniAiRuntime.dll` under installed mod dir)
+- `runtime_reload_interval_seconds` (default `1.0`)
+- `request_root_dir` (default empty -> `/tmp/oni_ai_assistant/requests`)
 
 Screenshot files are saved in the installed mod folder under `captures/`.
 
@@ -103,6 +134,14 @@ Run automated tests:
 cd ~/Dev/ONI-AI
 uv sync --group dev
 uv run pytest
+```
+
+
+Run runtime hot-reload integration test (build/install + watcher + DLL swap):
+
+```bash
+cd ~/Dev/ONI-AI
+ONI_AI_RUN_HOT_RELOAD_TEST=1 uv run pytest -m hot_reload -q -s
 ```
 
 Run high-fidelity integration with real `codex exec` (uses realistic ONI payload files):
