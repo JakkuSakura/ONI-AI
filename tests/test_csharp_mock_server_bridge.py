@@ -186,6 +186,7 @@ def test_bridge_with_csharp_mock_server(tmp_path: Path) -> None:
         assert stats_status == 200
         assert stats_payload["counters"]["state"] >= 1
         assert stats_payload["counters"]["actions_post"] >= 1
+        assert stats_payload["counters"]["priorities_get"] >= 0
 
     finally:
         process.terminate()
@@ -287,6 +288,28 @@ def test_bridge_allows_codex_live_post_actions(tmp_path: Path) -> None:
         posted_actions = [action for action in queued_actions if action.get("id") == "live-posted"]
         assert len(posted_actions) >= 1
         _assert_meaningful_action(posted_actions[0])
+
+        priorities_post_status, priorities_post_payload = _http_json(
+            f"{mock_base}/priorities",
+            method="POST",
+            body={
+                "priorities": [
+                    {
+                        "duplicant_id": "1001",
+                        "duplicant_name": "Ada",
+                        "values": {"dig": 8, "build": 6},
+                    }
+                ]
+            },
+        )
+        assert priorities_post_status == 200
+        assert priorities_post_payload.get("accepted") == 1
+
+        priorities_get_status, priorities_get_payload = _http_json(f"{mock_base}/priorities")
+        assert priorities_get_status == 200
+        assert isinstance(priorities_get_payload.get("priorities"), list)
+        assert isinstance(priorities_get_payload.get("updates"), list)
+        assert len(priorities_get_payload["updates"]) >= 1
 
     finally:
         process.terminate()

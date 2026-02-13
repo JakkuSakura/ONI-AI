@@ -93,3 +93,33 @@ def test_oni_http_post_actions_then_query_actions() -> None:
     assert matched[0].get("type") == "priority"
     assert isinstance(matched[0].get("params"), dict)
     assert matched[0]["params"].get("priority") == 8
+
+
+@pytest.mark.oni_live
+def test_oni_http_post_priorities_then_query_priorities() -> None:
+    base_url = _require_live_oni()
+
+    post_status, post_payload = _http_json(
+        f"{base_url}/priorities",
+        method="POST",
+        body={
+            "priorities": [
+                {
+                    "duplicant_name": "Ada",
+                    "values": {
+                        "dig": 8,
+                        "build": 6,
+                    },
+                }
+            ]
+        },
+    )
+    assert post_status == 200
+    assert isinstance(post_payload.get("accepted"), int)
+
+    get_status, get_payload = _http_json(f"{base_url}/priorities")
+    assert get_status == 200
+
+    priorities = get_payload.get("priorities")
+    assert isinstance(priorities, list)
+    assert len(priorities) >= 1

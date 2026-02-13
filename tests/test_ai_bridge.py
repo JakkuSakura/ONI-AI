@@ -45,7 +45,8 @@ def test_build_prompt_mentions_screenshot_flag() -> None:
     assert "api_base_url=http://127.0.0.1:8766" in prompt_with_image
     assert "set_duplicant_priority" in prompt_with_image
     assert "Do not run broad exploratory shell scans" in prompt_with_image
-    assert "you may submit immediate actions via POST to /actions" in prompt_with_image
+    assert "POST /actions and POST /priorities" in prompt_with_image
+    assert "GET /state and GET /priorities" in prompt_with_image
     assert "wiki.gg/Oxygen_Not_Included" in prompt_with_image
     assert "oxygennotincluded.wiki.gg" in prompt_with_image
 
@@ -75,6 +76,8 @@ def test_call_codex_exec_uses_stubbed_command(tmp_path: Path) -> None:
 
     assert parsed["actions"][0]["params"]["speed"] == 1
     assert "--skip-git-repo-check" in args_file.read_text(encoding="utf-8")
+    assert "-s" in args_file.read_text(encoding="utf-8")
+    assert "danger-full-access" in args_file.read_text(encoding="utf-8")
     args_text = args_file.read_text(encoding="utf-8")
     assert "-o" in args_text
     assert (request_dir / "logs" / "codex_stdout.txt").exists()
@@ -102,14 +105,18 @@ def test_call_codex_exec_can_disable_skip_git_repo_check(tmp_path: Path) -> None
     os.environ["ONI_AI_CODEX_CMD"] = str(stub)
     os.environ["ONI_AI_ARGS_FILE"] = str(args_file)
     os.environ["ONI_AI_CODEX_SKIP_GIT_REPO_CHECK"] = "0"
+    os.environ["ONI_AI_CODEX_SANDBOX"] = "workspace-write"
     try:
         json.loads(call_codex_exec({"request_dir": str(request_dir)}))
     finally:
         os.environ.pop("ONI_AI_CODEX_CMD", None)
         os.environ.pop("ONI_AI_ARGS_FILE", None)
         os.environ.pop("ONI_AI_CODEX_SKIP_GIT_REPO_CHECK", None)
+        os.environ.pop("ONI_AI_CODEX_SANDBOX", None)
 
-    assert "--skip-git-repo-check" not in args_file.read_text(encoding="utf-8")
+    args_text = args_file.read_text(encoding="utf-8")
+    assert "--skip-git-repo-check" not in args_text
+    assert "workspace-write" in args_text
 
 
 def test_call_codex_exec_prefers_output_last_message_file(tmp_path: Path) -> None:

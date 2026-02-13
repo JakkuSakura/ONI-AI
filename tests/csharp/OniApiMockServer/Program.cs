@@ -23,7 +23,11 @@ var requestCounters = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCa
     ["/state"] = 0,
     ["/actions_get"] = 0,
     ["/actions_post"] = 0,
+    ["/priorities_get"] = 0,
+    ["/priorities_post"] = 0,
 };
+
+var priorityUpdates = new JsonArray();
 
 var statePayload = new JsonObject
 {
@@ -242,6 +246,18 @@ while (true)
         continue;
     }
 
+    if (path == "/priorities" && method.Equals("GET", StringComparison.OrdinalIgnoreCase))
+    {
+        requestCounters["/priorities_get"]++;
+        await WriteJson(context.Response, 200, new JsonObject
+        {
+            ["priorities"] = statePayload["priorities"]?.DeepClone(),
+            ["updates"] = priorityUpdates,
+            ["source"] = "game_live",
+        });
+        continue;
+    }
+
     if (path == "/actions" && method.Equals("POST", StringComparison.OrdinalIgnoreCase))
     {
         requestCounters["/actions_post"]++;
@@ -278,6 +294,56 @@ while (true)
         continue;
     }
 
+    if (path == "/priorities" && method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+    {
+        requestCounters["/priorities_post"]++;
+        JsonNode? rootNode;
+        try
+        {
+            using var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding ?? Encoding.UTF8);
+            var body = await reader.ReadToEndAsync();
+            rootNode = JsonNode.Parse(body);
+        }
+        catch
+        {
+            await WriteJson(context.Response, 400, new JsonObject { ["error"] = "invalid_json" });
+            continue;
+        }
+
+        JsonArray? incomingPriorities = null;
+        if (rootNode is JsonObject bodyObject)
+        {
+            incomingPriorities = bodyObject["priorities"] as JsonArray;
+            if (incomingPriorities is null)
+            {
+                incomingPriorities = bodyObject["updates"] as JsonArray;
+            }
+        }
+
+        if (incomingPriorities is null)
+        {
+            await WriteJson(context.Response, 400, new JsonObject { ["error"] = "priorities_must_be_array" });
+            continue;
+        }
+
+        var accepted = 0;
+        foreach (var item in incomingPriorities)
+        {
+            if (item is JsonObject update)
+            {
+                priorityUpdates.Add(update.DeepClone());
+                accepted++;
+            }
+        }
+
+        await WriteJson(context.Response, 200, new JsonObject
+        {
+            ["accepted"] = accepted,
+            ["status"] = "scheduled",
+        });
+        continue;
+    }
+
     if (path == "/stats" && method.Equals("GET", StringComparison.OrdinalIgnoreCase))
     {
         await WriteJson(context.Response, 200, new JsonObject
@@ -288,6 +354,8 @@ while (true)
                 ["state"] = requestCounters["/state"],
                 ["actions_get"] = requestCounters["/actions_get"],
                 ["actions_post"] = requestCounters["/actions_post"],
+                ["priorities_get"] = requestCounters["/priorities_get"],
+                ["priorities_post"] = requestCounters["/priorities_post"],
             },
             ["pending_action_count"] = queuedActions.Count,
         });

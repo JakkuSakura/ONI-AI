@@ -22,12 +22,12 @@ paths:
           description: No snapshot available yet
   /actions:
     get:
-      summary: Current queued actions
+      summary: Current pending actions in game
       responses:
         '200':
-          description: Queued actions
+          description: Pending actions snapshot
     post:
-      summary: Enqueue actions for ONI main thread execution
+      summary: Submit actions for ONI main thread execution
       requestBody:
         required: true
         content:
@@ -44,5 +44,35 @@ paths:
       responses:
         '200':
           description: Accepted action count
+        '400':
+          description: Invalid payload
+  /priorities:
+    get:
+      summary: Current duplicant priorities snapshot
+      responses:
+        '200':
+          description: Live priorities snapshot
+    post:
+      summary: Submit duplicant priority updates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                priorities:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+                updates:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+      responses:
+        '200':
+          description: Accepted priority update count
         '400':
           description: Invalid payload

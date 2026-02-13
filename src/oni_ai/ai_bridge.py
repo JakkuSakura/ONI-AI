@@ -185,6 +185,7 @@ def build_prompt(payload: dict, has_screenshot: bool) -> str:
             "Use local reference: ./openapi.yaml. "
             "Read the schema directly to understand all supported actions and required fields. "
             "Before planning, fetch live game state from ONI HTTP APIs. "
+            "Use only the API paths defined by ./openapi.yaml. "
             "Output MUST be valid JSON with top-level keys: analysis, suggestions, actions, notes. "
             "Return a meaningful prioritized plan with 3-8 actions by default. "
             "Do NOT return a trivial single-action plan (for example only set_speed) unless there is a clear emergency reason; "
@@ -196,11 +197,14 @@ def build_prompt(payload: dict, has_screenshot: bool) -> str:
             "Use cancel when a previously proposed action is unsafe or conflicts with survival goals. "
             "Always include stable action ids and concrete params. "
             "Do not run broad exploratory shell scans or commands that print huge outputs. "
-            "Use concise, targeted file reads only. "
+            "Do not dump or enumerate full state payload keys. "
+            "Never run jq keys/to_entries or broad rg against full state blobs. "
+            "Use concise targeted reads and limit shell calls to minimal API checks. "
             "You may query ONI wiki sources for mechanics/building/research facts when needed: wiki.gg/Oxygen_Not_Included, oxygennotincluded.wiki.gg, oni-db.com, and klei.com forums. "
             "Use targeted lookups only; avoid broad web crawling. "
-            "When state context is paused and api_base_url is available, you may submit immediate actions via POST to /actions while planning. "
+            "When state context is paused and api_base_url is available, you may submit immediate updates via POST /actions and POST /priorities while planning. "
             "If you do live POST, keep it minimal, survival-focused, and still return final JSON plan. "
+            "After reading openapi.yaml, first call GET /state and GET /priorities, then plan. "
             "Return ONLY JSON with top-level keys in this order: analysis, suggestions, actions, notes. "
             "analysis should summarize colony risk and why the plan helps survival. "
             "suggestions should be concise human-readable bullets as an array of strings."
@@ -212,7 +216,8 @@ def build_prompt(payload: dict, has_screenshot: bool) -> str:
         api_note = (
             f"ONI API api_base_url={api_base_url}; "
             "read endpoint paths from ./openapi.yaml. "
-            "Use GET /state as primary source of truth and POST /actions for live action submission when paused."
+            "Use GET /state and GET /priorities as primary source of truth. "
+            "Use POST /actions and POST /priorities for live updates when paused."
         )
     else:
         api_note = (
@@ -332,6 +337,8 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
 
     skip_git_repo_check = is_truthy_env("ONI_AI_CODEX_SKIP_GIT_REPO_CHECK", True)
     timeout_seconds = int(os.getenv("ONI_AI_CODEX_TIMEOUT_SECONDS", "90"))
+    codex_sandbox_mode = os.getenv("ONI_AI_CODEX_SANDBOX", "danger-full-access").strip() or "danger-full-access"
+
 
     request_dir = str(payload.get("request_dir", "")).strip()
     if not request_dir or not os.path.isdir(request_dir):
@@ -346,18 +353,19 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
     last_message_path = logs_dir / "codex_last_message.json"
 
     LOGGER.info(
-        "request=%s invoking codex cmd=%s timeout=%ss request_dir=%s has_screenshot=%s skip_git_repo_check=%s",
+        "request=%s invoking codex cmd=%s timeout=%ss request_dir=%s has_screenshot=%s skip_git_repo_check=%s sandbox=%s",
         request_tag,
         shlex.join(codex_cmd_parts),
         timeout_seconds,
         request_dir,
         has_screenshot,
         skip_git_repo_check,
+        codex_sandbox_mode,
     )
 
     prompt = build_prompt(payload, has_screenshot)
     LOGGER.debug("request=%s prompt_preview=%s", request_tag, preview_text(prompt, 500))
-    command = [*codex_cmd_parts, "exec", "-o", str(last_message_path)]
+    command = [*codex_cmd_parts, "exec", "-s", codex_sandbox_mode, "-o", str(last_message_path)]
     if skip_git_repo_check:
         command.append("--skip-git-repo-check")
     command.append(prompt)
