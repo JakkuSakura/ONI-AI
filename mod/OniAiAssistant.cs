@@ -48,7 +48,11 @@ namespace OniAiAssistant
         private KButton triggerButton;
         private LocText triggerButtonText;
         private GameObject buttonRoot;
+        private GameObject messageCanvasRoot;
+        private Text messageText;
+        private float messageHideAt;
         private float nextUiAttachAttemptAt;
+        private bool loggedButtonAttachFailure;
 
         public static void EnsureInstance()
         {
@@ -76,6 +80,11 @@ namespace OniAiAssistant
                 TryCreateNativeUiButton();
             }
 
+            if (messageCanvasRoot != null && messageCanvasRoot.activeSelf && Time.unscaledTime >= messageHideAt)
+            {
+                messageCanvasRoot.SetActive(false);
+            }
+
             if (isBusy)
             {
                 return;
@@ -94,6 +103,7 @@ namespace OniAiAssistant
                 return;
             }
 
+            ShowInGameMessage("ONI AI: analyzing colony...");
             StartCoroutine(RunAiCycle());
         }
 
@@ -106,20 +116,41 @@ namespace OniAiAssistant
 
             nextUiAttachAttemptAt = Time.unscaledTime + 2f;
 
+            KButton templateButton = null;
+            Transform parentTransform = null;
+
             var topLeftControl = FindObjectOfType<TopLeftControlScreen>();
-            if (topLeftControl == null)
+            if (topLeftControl != null)
             {
-                return;
+                templateButton = FindTemplateButton(topLeftControl.transform);
+                if (templateButton != null)
+                {
+                    parentTransform = templateButton.transform.parent;
+                }
             }
 
-            var templateButton = FindTemplateButton(topLeftControl);
             if (templateButton == null)
             {
+                templateButton = FindFallbackTemplateButton();
+                if (templateButton != null)
+                {
+                    parentTransform = templateButton.transform.parent;
+                    Debug.Log("[ONI-AI] Using fallback KButton template for ONI AI button attachment");
+                }
+            }
+
+            if (templateButton == null)
+            {
+                if (!loggedButtonAttachFailure)
+                {
+                    Debug.LogWarning("[ONI-AI] Could not find a UI template button yet; retrying");
+                    loggedButtonAttachFailure = true;
+                }
                 return;
             }
 
             GameObject templateObject = templateButton.gameObject;
-            GameObject root = Instantiate(templateObject, templateObject.transform.parent);
+            GameObject root = Instantiate(templateObject, parentTransform);
             root.name = "OniAiAssistantNativeButton";
 
             triggerButton = root.GetComponent<KButton>();
@@ -146,12 +177,13 @@ namespace OniAiAssistant
             }
 
             buttonRoot = root;
-            Debug.Log("[ONI-AI] Native button attached to TopLeftControlScreen");
+            loggedButtonAttachFailure = false;
+            Debug.Log("[ONI-AI] Native button attached");
         }
 
-        private static KButton FindTemplateButton(TopLeftControlScreen topLeftControl)
+        private static KButton FindTemplateButton(Transform root)
         {
-            foreach (var button in topLeftControl.GetComponentsInChildren<KButton>(true))
+            foreach (var button in root.GetComponentsInChildren<KButton>(true))
             {
                 if (button == null)
                 {
@@ -163,6 +195,32 @@ namespace OniAiAssistant
                 {
                     return button;
                 }
+            }
+
+            return null;
+        }
+
+        private static KButton FindFallbackTemplateButton()
+        {
+            foreach (var button in Resources.FindObjectsOfTypeAll<KButton>())
+            {
+                if (button == null || button.transform == null || button.transform.parent == null)
+                {
+                    continue;
+                }
+
+                if (!button.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                var text = button.GetComponentInChildren<LocText>(true);
+                if (text == null)
+                {
+                    continue;
+                }
+
+                return button;
             }
 
             return null;
@@ -207,15 +265,100 @@ namespace OniAiAssistant
             if (httpOk)
             {
                 finalSpeed = ExecutePlan(aiResponse, requestContext, previousSpeed);
+                ShowInGameMessage("ONI AI: completed", new Color(0.70f, 1.00f, 0.75f, 1.00f), 2.5f);
             }
             else
             {
                 Debug.LogWarning("[ONI-AI] Bridge request failed");
                 WriteTextSafe(Path.Combine(requestContext.RequestDir, "bridge_error.txt"), "Request failed or timed out");
+                ShowInGameMessage("ONI AI: bridge unreachable", new Color(1.00f, 0.70f, 0.70f, 1.00f), 4.0f);
             }
 
             ResumeGame(speedControl, finalSpeed);
             SetBusyUiState(false);
+        }
+
+        private void ShowInGameMessage(string text)
+        {
+            ShowInGameMessage(text, new Color(0.86f, 0.94f, 1.00f, 1.00f), 2.0f);
+        }
+
+        private void ShowInGameMessage(string text, Color color, float durationSeconds)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            EnsureMessageOverlay();
+            if (messageCanvasRoot == null || messageText == null)
+            {
+                return;
+            }
+
+            messageText.text = text;
+            messageText.color = color;
+            messageCanvasRoot.SetActive(true);
+            messageHideAt = Time.unscaledTime + Mathf.Max(0.5f, durationSeconds);
+        }
+
+        private void EnsureMessageOverlay()
+        {
+            if (messageCanvasRoot != null && messageText != null)
+            {
+                return;
+            }
+
+            var root = new GameObject("OniAiOverlay");
+            DontDestroyOnLoad(root);
+
+            var canvas = root.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.sortingOrder = short.MaxValue;
+
+            var scaler = root.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920f, 1080f);
+            scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+            scaler.matchWidthOrHeight = 0.5f;
+
+            var raycaster = root.AddComponent<GraphicRaycaster>();
+            raycaster.enabled = false;
+
+            var textObject = new GameObject("StatusText");
+            textObject.transform.SetParent(root.transform, false);
+
+            var rect = textObject.AddComponent<RectTransform>();
+            rect.anchorMin = new Vector2(0.5f, 1f);
+            rect.anchorMax = new Vector2(0.5f, 1f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = new Vector2(0f, -150f);
+            rect.sizeDelta = new Vector2(1200f, 120f);
+
+            var uiText = textObject.AddComponent<Text>();
+            uiText.alignment = TextAnchor.MiddleCenter;
+            uiText.resizeTextForBestFit = true;
+            uiText.resizeTextMinSize = 16;
+            uiText.resizeTextMaxSize = 34;
+            uiText.horizontalOverflow = HorizontalWrapMode.Wrap;
+            uiText.verticalOverflow = VerticalWrapMode.Truncate;
+            uiText.color = new Color(0.86f, 0.94f, 1.00f, 1.00f);
+            uiText.raycastTarget = false;
+
+            var font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            if (font != null)
+            {
+                uiText.font = font;
+            }
+
+            var outline = textObject.AddComponent<Outline>();
+            outline.effectColor = new Color(0f, 0f, 0f, 0.85f);
+            outline.effectDistance = new Vector2(1f, -1f);
+
+            root.SetActive(false);
+
+            messageCanvasRoot = root;
+            messageText = uiText;
         }
 
         private static void PauseGame(SpeedControlScreen speedControl)
@@ -243,7 +386,8 @@ namespace OniAiAssistant
         {
             string timestamp = System.DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
             string requestId = timestamp + "_" + UnityEngine.Random.Range(1000, 9999).ToString(CultureInfo.InvariantCulture);
-            string requestDir = Path.Combine(GetModDirectory(), "requests", requestId);
+            string requestRoot = GetRequestRootDirectory();
+            string requestDir = Path.Combine(requestRoot, requestId);
             string snapshotDir = Path.Combine(requestDir, "snapshot");
             string logsDir = Path.Combine(requestDir, "logs");
 
@@ -278,6 +422,22 @@ namespace OniAiAssistant
                 SnapshotDir = snapshotDir,
                 PayloadJson = requestEnvelope.ToString(Formatting.None)
             };
+        }
+
+        private string GetRequestRootDirectory()
+        {
+            string configured = config != null ? config.RequestRootDir : string.Empty;
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                if (Path.IsPathRooted(configured))
+                {
+                    return configured;
+                }
+
+                return Path.GetFullPath(Path.Combine(GetModDirectory(), configured));
+            }
+
+            return Path.Combine(Path.GetTempPath(), "oni_ai_assistant", "requests");
         }
 
         private static JObject BuildRuntimeConfigObject()
@@ -700,6 +860,8 @@ namespace OniAiAssistant
 
         public int RequestTimeoutSeconds { get; private set; } = 120;
 
+        public string RequestRootDir { get; private set; } = string.Empty;
+
         public static OniAiConfig Load()
         {
             var config = new OniAiConfig();
@@ -759,6 +921,13 @@ namespace OniAiAssistant
                     {
                         config.RequestTimeoutSeconds = timeout;
                     }
+
+                    continue;
+                }
+
+                if (key.Equals("request_root_dir", StringComparison.OrdinalIgnoreCase))
+                {
+                    config.RequestRootDir = value;
                 }
             }
 

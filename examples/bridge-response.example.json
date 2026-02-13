@@ -1,0 +1,12 @@
+{
+  "actions": [
+    {
+      "id": "a1",
+      "type": "set_speed",
+      "params": {
+        "speed": 2
+      }
+    }
+  ],
+  "notes": "Insufficient visual certainty for build/dig; keep simulation at normal speed."
+}

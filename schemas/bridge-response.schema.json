@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/JakkuSakura/ONI-AI/schemas/bridge-response.schema.json",
+  "title": "ONI AI Bridge Response",
+  "description": "Normalized response returned by bridge to ONI mod.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["actions"],
+  "properties": {
+    "actions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/action"
+      }
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "action": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "set_speed",
+            "no_op",
+            "build",
+            "dig",
+            "deconstruct",
+            "priority",
+            "arrangement",
+            "research",
+            "pause",
+            "resume"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "speed": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": { "const": "set_speed" }
+            }
+          },
+          "then": {
+            "required": ["params"],
+            "properties": {
+              "params": {
+                "required": ["speed"]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

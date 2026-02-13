@@ -57,8 +57,23 @@ Optional env vars:
 - `ONI_AI_PROMPT` (custom decision prompt for `codex exec`)
 - `ONI_AI_BRIDGE_HOST` (default: `127.0.0.1`)
 - `ONI_AI_BRIDGE_PORT` (default: `8765`)
+- `ONI_AI_LOG_LEVEL` (default: `INFO`, set `DEBUG` for verbose tracing)
+- `ONI_AI_SCREENSHOT_WAIT_MS` (default: `500`, wait before `codex exec` for screenshot flush)
+- `ONI_AI_SCREENSHOT_POLL_MS` (default: `50`, poll interval while waiting for screenshot)
 
 The bridge writes request data to a temp directory (`request.json`, `context.json`, optional `screenshot.png`) and invokes `codex exec` there, then parses the output into ONI actions.
+
+By default, mod requests are written under system tmp:
+
+- `/tmp/oni_ai_assistant/requests/<request_id>`
+
+You can override this in `mod/oni_ai_config.ini` via `request_root_dir`.
+
+For intensive runtime logs:
+
+```bash
+ONI_AI_LOG_LEVEL=DEBUG uv run oni-ai-bridge
+```
 
 ## In-game usage
 

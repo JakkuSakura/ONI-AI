@@ -1,0 +1,17 @@
+{
+  "request_id": "20260213_113310_743_8765",
+  "request_dir": "/Users/jakku/Library/Application Support/unity.Klei.Oxygen Not Included/mods/local/jakku.oni_ai_assistant/requests/20260213_113310_743_8765",
+  "snapshot_dir": "/Users/jakku/Library/Application Support/unity.Klei.Oxygen Not Included/mods/local/jakku.oni_ai_assistant/requests/20260213_113310_743_8765/snapshot",
+  "screenshot_path": "/Users/jakku/Library/Application Support/unity.Klei.Oxygen Not Included/mods/local/jakku.oni_ai_assistant/requests/20260213_113310_743_8765/snapshot/screenshot.png",
+  "requested_at_utc": "2026-02-13T11:33:10.7440980Z",
+  "context": {
+    "cycle": 0,
+    "time_since_cycle_start": 230.587387,
+    "time_in_cycles": 0.3843123,
+    "paused": true,
+    "current_speed": 2,
+    "previous_speed": 2,
+    "real_time_since_startup_seconds": 266.868256,
+    "unscaled_time_seconds": 266.856537
+  }
+}
