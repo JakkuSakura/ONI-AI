@@ -1895,7 +1895,12 @@ namespace OniAiAssistant
                 return false;
             }
 
-            int accepted = 0;
+            if (!TryOptimizeArrangementQueue(queue, out List<JObject> optimizedActions, out string optimizeMessage))
+            {
+                message = optimizeMessage;
+                return false;
+            }
+
             lock (httpSync)
             {
                 if (queuedHttpActions == null)
@@ -1903,26 +1908,338 @@ namespace OniAiAssistant
                     queuedHttpActions = new JArray();
                 }
 
-                foreach (JToken token in queue)
+                foreach (JObject actionObject in optimizedActions)
                 {
-                    if (!(token is JObject actionObject))
+                    queuedHttpActions.Add(actionObject.DeepClone());
+                }
+            }
+
+            message = "Queued " + optimizedActions.Count.ToString(CultureInfo.InvariantCulture) + " arranged actions; " + optimizeMessage;
+            return true;
+        }
+
+        private bool TryOptimizeArrangementQueue(JArray queue, out List<JObject> optimizedActions, out string message)
+        {
+            optimizedActions = new List<JObject>();
+            message = "arrangement optimization completed";
+
+            var nodes = new List<ArrangementNode>();
+            var indexById = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            for (int index = 0; index < queue.Count; index++)
+            {
+                if (!(queue[index] is JObject actionObject))
+                {
+                    message = "arrangement queue item at index=" + index.ToString(CultureInfo.InvariantCulture) + " is not an object";
+                    return false;
+                }
+
+                string actionType = (actionObject.Value<string>("type") ?? string.Empty).Trim().ToLowerInvariant();
+                if (string.IsNullOrWhiteSpace(actionType))
+                {
+                    message = "arrangement queue item at index=" + index.ToString(CultureInfo.InvariantCulture) + " is missing type";
+                    return false;
+                }
+
+                string actionId = (actionObject.Value<string>("id") ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(actionId))
+                {
+                    actionId = "arranged-" + index.ToString(CultureInfo.InvariantCulture);
+                }
+                else if (indexById.ContainsKey(actionId))
+                {
+                    message = "arrangement queue contains duplicate action id=" + actionId;
+                    return false;
+                }
+
+                JObject paramsObject = actionObject["params"] as JObject ?? new JObject();
+                var normalized = (JObject)actionObject.DeepClone();
+                normalized["id"] = actionId;
+                normalized["type"] = actionType;
+                normalized["params"] = paramsObject;
+
+                var node = new ArrangementNode
+                {
+                    Index = index,
+                    Id = actionId,
+                    Type = actionType,
+                    Action = normalized,
+                    Params = paramsObject,
+                    Rank = GetArrangementActionRank(actionType),
+                    Cells = new HashSet<int>(ResolveCellsFromParameters(paramsObject))
+                };
+
+                nodes.Add(node);
+                indexById[actionId] = index;
+            }
+
+            for (int index = 0; index < nodes.Count; index++)
+            {
+                ArrangementNode node = nodes[index];
+                foreach (string dependencyId in EnumerateArrangementDependencyIds(node.Action))
+                {
+                    if (!indexById.TryGetValue(dependencyId, out int dependencyIndex))
+                    {
+                        message = "arrangement action id=" + node.Id + " depends on unknown id=" + dependencyId;
+                        return false;
+                    }
+
+                    if (dependencyIndex == index)
+                    {
+                        message = "arrangement action id=" + node.Id + " cannot depend on itself";
+                        return false;
+                    }
+
+                    node.Dependencies.Add(dependencyIndex);
+                }
+
+                foreach (string beforeId in EnumerateArrangementBeforeIds(node.Action))
+                {
+                    if (!indexById.TryGetValue(beforeId, out int beforeIndex))
+                    {
+                        message = "arrangement action id=" + node.Id + " references unknown before id=" + beforeId;
+                        return false;
+                    }
+
+                    if (beforeIndex == index)
+                    {
+                        message = "arrangement action id=" + node.Id + " cannot be before itself";
+                        return false;
+                    }
+
+                    nodes[beforeIndex].Dependencies.Add(index);
+                }
+            }
+
+            for (int index = 0; index < nodes.Count; index++)
+            {
+                ArrangementNode node = nodes[index];
+                if (node.Cells.Count == 0)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(node.Type, "build", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                for (int candidateIndex = 0; candidateIndex < nodes.Count; candidateIndex++)
+                {
+                    if (candidateIndex == index)
                     {
                         continue;
                     }
 
-                    queuedHttpActions.Add(actionObject.DeepClone());
-                    accepted++;
+                    ArrangementNode candidate = nodes[candidateIndex];
+                    bool isPrerequisiteType = string.Equals(candidate.Type, "dig", StringComparison.Ordinal)
+                        || string.Equals(candidate.Type, "deconstruct", StringComparison.Ordinal);
+                    if (!isPrerequisiteType || candidate.Cells.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    if (candidate.Cells.Overlaps(node.Cells))
+                    {
+                        node.Dependencies.Add(candidateIndex);
+                    }
                 }
             }
 
-            if (accepted == 0)
+            int nodeCount = nodes.Count;
+            int[] inDegree = new int[nodeCount];
+            var reverseEdges = new List<int>[nodeCount];
+            for (int index = 0; index < nodeCount; index++)
             {
-                message = "arrangement queue contains no valid action objects";
+                reverseEdges[index] = new List<int>();
+            }
+
+            for (int index = 0; index < nodeCount; index++)
+            {
+                foreach (int dependency in nodes[index].Dependencies)
+                {
+                    inDegree[index]++;
+                    reverseEdges[dependency].Add(index);
+                }
+            }
+
+            var ready = new List<int>();
+            for (int index = 0; index < nodeCount; index++)
+            {
+                if (inDegree[index] == 0)
+                {
+                    ready.Add(index);
+                }
+            }
+
+            var orderedIndexes = new List<int>(nodeCount);
+            while (ready.Count > 0)
+            {
+                int bestPosition = 0;
+                int bestIndex = ready[0];
+                for (int position = 1; position < ready.Count; position++)
+                {
+                    int candidateIndex = ready[position];
+                    ArrangementNode candidate = nodes[candidateIndex];
+                    ArrangementNode best = nodes[bestIndex];
+
+                    if (candidate.Rank < best.Rank || (candidate.Rank == best.Rank && candidate.Index < best.Index))
+                    {
+                        bestPosition = position;
+                        bestIndex = candidateIndex;
+                    }
+                }
+
+                ready.RemoveAt(bestPosition);
+                orderedIndexes.Add(bestIndex);
+
+                foreach (int dependentIndex in reverseEdges[bestIndex])
+                {
+                    inDegree[dependentIndex]--;
+                    if (inDegree[dependentIndex] == 0)
+                    {
+                        ready.Add(dependentIndex);
+                    }
+                }
+            }
+
+            if (orderedIndexes.Count != nodeCount)
+            {
+                var blocked = new List<string>();
+                for (int index = 0; index < nodeCount; index++)
+                {
+                    if (inDegree[index] > 0)
+                    {
+                        blocked.Add(nodes[index].Id);
+                    }
+                }
+
+                message = "arrangement dependencies contain cycle; blocked ids=" + string.Join(",", blocked.ToArray());
                 return false;
             }
 
-            message = "Queued " + accepted.ToString(CultureInfo.InvariantCulture) + " arranged actions";
+            bool changed = false;
+            for (int position = 0; position < orderedIndexes.Count; position++)
+            {
+                int nodeIndex = orderedIndexes[position];
+                optimizedActions.Add((JObject)nodes[nodeIndex].Action.DeepClone());
+                if (nodeIndex != position)
+                {
+                    changed = true;
+                }
+            }
+
+            message = changed ? "arrangement reordered actions using dependencies" : "arrangement kept provided order (already optimal)";
             return true;
+        }
+
+        private static IEnumerable<string> EnumerateArrangementDependencyIds(JObject action)
+        {
+            foreach (string value in EnumerateStringValues(action["after"]))
+            {
+                yield return value;
+            }
+
+            foreach (string value in EnumerateStringValues(action["depends_on"]))
+            {
+                yield return value;
+            }
+
+            foreach (string value in EnumerateStringValues(action["dependsOn"]))
+            {
+                yield return value;
+            }
+        }
+
+        private static IEnumerable<string> EnumerateArrangementBeforeIds(JObject action)
+        {
+            foreach (string value in EnumerateStringValues(action["before"]))
+            {
+                yield return value;
+            }
+        }
+
+        private static IEnumerable<string> EnumerateStringValues(JToken token)
+        {
+            if (token == null)
+            {
+                yield break;
+            }
+
+            if (token.Type == JTokenType.String)
+            {
+                string single = token.Value<string>();
+                if (!string.IsNullOrWhiteSpace(single))
+                {
+                    yield return single.Trim();
+                }
+
+                yield break;
+            }
+
+            if (!(token is JArray array))
+            {
+                yield break;
+            }
+
+            foreach (JToken item in array)
+            {
+                if (item?.Type != JTokenType.String)
+                {
+                    continue;
+                }
+
+                string value = item.Value<string>();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    yield return value.Trim();
+                }
+            }
+        }
+
+        private static int GetArrangementActionRank(string actionType)
+        {
+            if (string.IsNullOrWhiteSpace(actionType))
+            {
+                return 50;
+            }
+
+            switch (actionType.Trim().ToLowerInvariant())
+            {
+                case "cancel":
+                    return 0;
+                case "deconstruct":
+                    return 10;
+                case "dig":
+                    return 20;
+                case "build":
+                    return 30;
+                case "priority":
+                case "set_duplicant_priority":
+                case "set_duplicant_skills":
+                case "set_duplicant_status":
+                    return 40;
+                case "research":
+                    return 50;
+                case "set_speed":
+                case "pause":
+                case "resume":
+                    return 90;
+                default:
+                    return 60;
+            }
+        }
+
+        private sealed class ArrangementNode
+        {
+            public int Index;
+            public string Id;
+            public string Type;
+            public int Rank;
+            public JObject Action;
+            public JObject Params;
+            public HashSet<int> Dependencies = new HashSet<int>();
+            public HashSet<int> Cells = new HashSet<int>();
         }
 
         private bool TryApplyResearchAction(JObject parameters, out string message)
