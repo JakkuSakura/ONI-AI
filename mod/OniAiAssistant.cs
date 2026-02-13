@@ -1007,13 +1007,12 @@ namespace OniAiAssistant
                 Component choreConsumer = FindComponentByTypeName(behaviour.gameObject, "ChoreConsumer");
                 if (choreConsumer != null)
                 {
-                    object queue = TryGetMemberValue(choreConsumer, "choreQueue")
-                        ?? TryGetMemberValue(choreConsumer, "chores")
+                    object choreList = TryGetMemberValue(choreConsumer, "chores")
                         ?? TryGetMemberValue(choreConsumer, "availableChores");
-                    JToken queueToken = ConvertToJToken(queue, 2);
-                    if (queueToken != null)
+                    JToken choreToken = ConvertToJToken(choreList, 2);
+                    if (choreToken != null)
                     {
-                        item["queue"] = queueToken;
+                        item["chores"] = choreToken;
                     }
                 }
 
@@ -1497,7 +1496,7 @@ namespace OniAiAssistant
                 return false;
             }
 
-            message = "Queued dig for " + applied.ToString(CultureInfo.InvariantCulture) + " cells";
+            message = "Applied dig to " + applied.ToString(CultureInfo.InvariantCulture) + " cells";
             return true;
         }
 
@@ -1532,7 +1531,7 @@ namespace OniAiAssistant
                 return false;
             }
 
-            message = "Queued deconstruct for " + applied.ToString(CultureInfo.InvariantCulture) + " cells";
+            message = "Applied deconstruct to " + applied.ToString(CultureInfo.InvariantCulture) + " cells";
             return true;
         }
 
@@ -1614,7 +1613,7 @@ namespace OniAiAssistant
                 return false;
             }
 
-            message = "Queued build id=" + buildingId + " for " + applied.ToString(CultureInfo.InvariantCulture) + " cells";
+            message = "Applied build id=" + buildingId + " to " + applied.ToString(CultureInfo.InvariantCulture) + " cells";
             return true;
         }
 
@@ -1630,14 +1629,14 @@ namespace OniAiAssistant
 
         private bool TryApplyArrangementAction(JObject parameters, out string message)
         {
-            JArray queue = parameters["queue"] as JArray;
-            if (queue == null || queue.Count == 0)
+            JArray actionItems = parameters["actions"] as JArray;
+            if (actionItems == null || actionItems.Count == 0)
             {
-                message = "arrangement requires params.queue array";
+                message = "arrangement requires params.actions array";
                 return false;
             }
 
-            if (!TryOptimizeArrangementQueue(queue, out List<JObject> optimizedActions, out string optimizeMessage))
+            if (!TryOptimizeArrangementActions(actionItems, out List<JObject> optimizedActions, out string optimizeMessage))
             {
                 message = optimizeMessage;
                 return false;
@@ -1794,7 +1793,7 @@ namespace OniAiAssistant
             return true;
         }
 
-        private bool TryOptimizeArrangementQueue(JArray queue, out List<JObject> optimizedActions, out string message)
+        private bool TryOptimizeArrangementActions(JArray actionItems, out List<JObject> optimizedActions, out string message)
         {
             optimizedActions = new List<JObject>();
             message = "arrangement optimization completed";
@@ -1802,18 +1801,18 @@ namespace OniAiAssistant
             var nodes = new List<ArrangementNode>();
             var indexById = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-            for (int index = 0; index < queue.Count; index++)
+            for (int index = 0; index < actionItems.Count; index++)
             {
-                if (!(queue[index] is JObject actionObject))
+                if (!(actionItems[index] is JObject actionObject))
                 {
-                    message = "arrangement queue item at index=" + index.ToString(CultureInfo.InvariantCulture) + " is not an object";
+                    message = "arrangement action item at index=" + index.ToString(CultureInfo.InvariantCulture) + " is not an object";
                     return false;
                 }
 
                 string actionType = (actionObject.Value<string>("type") ?? string.Empty).Trim().ToLowerInvariant();
                 if (string.IsNullOrWhiteSpace(actionType))
                 {
-                    message = "arrangement queue item at index=" + index.ToString(CultureInfo.InvariantCulture) + " is missing type";
+                    message = "arrangement action item at index=" + index.ToString(CultureInfo.InvariantCulture) + " is missing type";
                     return false;
                 }
 
@@ -1824,7 +1823,7 @@ namespace OniAiAssistant
                 }
                 else if (indexById.ContainsKey(actionId))
                 {
-                    message = "arrangement queue contains duplicate action id=" + actionId;
+                    message = "arrangement contains duplicate action id=" + actionId;
                     return false;
                 }
 
@@ -2145,7 +2144,6 @@ namespace OniAiAssistant
             bool invoked = TryInvokeMethodByName(researchSingleton, "SetActiveResearch", new[] { tech, false })
                 || TryInvokeMethodByName(researchSingleton, "SetActiveResearch", new[] { tech, true })
                 || TryInvokeMethodByName(researchSingleton, "SetActiveResearch", new[] { tech })
-                || TryInvokeMethodByName(researchSingleton, "QueueResearch", new[] { tech })
                 || TryInvokeMethodByName(researchSingleton, "SetResearch", new[] { tech });
 
             if (!invoked)
@@ -3156,7 +3154,6 @@ namespace OniAiAssistant
                 TryWriteJson(context.Response, 200, new JObject
                 {
                     ["planned_actions"] = planned,
-                    ["queued_http_actions"] = new JArray(),
                     ["last_execution"] = execution,
                     ["pending_actions"] = BuildPendingActionsSnapshot()
                 });
