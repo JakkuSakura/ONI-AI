@@ -24,3 +24,6 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  "real_codex: runs codex exec against realistic snapshot payload",
+]

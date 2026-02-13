@@ -90,6 +90,20 @@ uv sync --group dev
 uv run pytest
 ```
 
+Run high-fidelity integration with real `codex exec` (uses realistic ONI payload files):
+
+```bash
+cd ~/Dev/ONI-AI
+ONI_AI_RUN_REAL_CODEX=1 uv run pytest -m real_codex -q -s
+```
+
+The test writes raw and extracted responses under a temp request directory:
+
+- `logs/codex_stdout.txt`
+- `logs/codex_stderr.txt`
+- `logs/codex_exit_code.txt`
+- `logs/extracted_response.json`
+
 ```bash
 cd ~/Dev/ONI-AI
 mkdir -p /tmp/oni-test/snapshot
