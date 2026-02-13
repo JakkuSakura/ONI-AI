@@ -31,7 +31,7 @@ CSC_BIN="${CSC_BIN:-csc}"
   -r:"$MANAGED_DIR/UnityEngine.IMGUIModule.dll" \
   -r:"$MANAGED_DIR/UnityEngine.ScreenCaptureModule.dll" \
   -r:"$MANAGED_DIR/UnityEngine.UnityWebRequestModule.dll" \
-  "$MOD_DIR/OniAiAssistant.cs"
+  "$MOD_DIR"/*.cs
 
 "$CSC_BIN" \
   -nologo \

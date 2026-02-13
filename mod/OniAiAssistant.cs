@@ -49,7 +49,7 @@ namespace OniAiAssistant
         }
     }
 
-    public sealed class OniAiController : MonoBehaviour
+    public sealed partial class OniAiController : MonoBehaviour
     {
         private const string ButtonIdleText = "ONI AI Request";
         private const string ButtonBusyText = "AI Working...";
@@ -631,27 +631,8 @@ namespace OniAiAssistant
 
             string screenshotRelativePath = "screenshot.png";
 
-            var context = BuildContextObject(previousSpeed);
-            var state = new JObject
-            {
-                ["request_id"] = requestId,
-                ["request_dir"] = ".",
-                ["state_path"] = "state.json",
-                ["screenshot_path"] = screenshotRelativePath,
-                ["requested_at_utc"] = System.DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
-                ["context"] = context,
-                ["duplicants"] = BuildDuplicantsSnapshot(),
-                ["pending_actions"] = BuildPendingActionsSnapshot(),
-                ["priorities"] = BuildPrioritiesSnapshot(),
-                ["runtime_config"] = BuildRuntimeConfigObject(),
-                ["assemblies"] = BuildAssembliesObject(),
-                ["scenes"] = BuildScenesObject(),
-                ["singletons"] = BuildSingletonSnapshot()
-            };
-
-            JObject bridgePayload = (JObject)state.DeepClone();
-            bridgePayload["request_dir"] = requestDir;
-            bridgePayload["state_path"] = "state.json";
+            JObject state = BuildStatePayload(requestId, previousSpeed, screenshotRelativePath);
+            JObject bridgePayload = BuildBridgePayload(state, requestDir);
 
             WriteJsonSafe(Path.Combine(requestDir, "state.json"), state);
 
@@ -1283,11 +1264,7 @@ namespace OniAiAssistant
                 return outcome;
             }
 
-            JArray actionArray = root["actions"] as JArray;
-            if (actionArray == null && root is JArray)
-            {
-                actionArray = (JArray)root;
-            }
+            JArray actionArray = ExtractActionArray(root);
 
             if (actionArray == null)
             {
@@ -1306,9 +1283,9 @@ namespace OniAiAssistant
                     continue;
                 }
 
-                string actionType = (actionObject.Value<string>("type") ?? string.Empty).Trim().ToLowerInvariant();
-                string actionId = (actionObject.Value<string>("id") ?? Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)).Trim();
-                JObject parameters = actionObject["params"] as JObject ?? new JObject();
+                string actionType = ResolveActionType(actionObject);
+                string actionId = ResolveActionId(actionObject);
+                JObject parameters = ResolveActionParameters(actionObject);
 
                 var itemLog = new JObject
                 {
