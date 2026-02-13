@@ -21,18 +21,26 @@ def test_runtime_hot_reload_watcher_updates_installed_dll() -> None:
         pytest.skip(f"Set {HOT_RELOAD_ENV_FLAG}=1 to run this integration test")
 
     repo_root = Path(__file__).resolve().parents[1]
-    runtime_source = repo_root / "runtime" / "OniAiRuntime.cs"
+    runtime_source = repo_root / "runtime" / "EntryPoint.cs"
 
     oni_mods_dir = Path(os.getenv("ONI_MODS_DIR", str(Path.home() / "Library/Application Support/unity.Klei.Oxygen Not Included/mods")))
     installed_runtime = oni_mods_dir / "local" / "jakku.oni_ai_assistant" / "runtime" / "OniAiRuntime.dll"
 
     original_source = runtime_source.read_text(encoding="utf-8")
     marker = f"hot-reload-{uuid.uuid4().hex[:8]}"
-    patched_source = original_source.replace(
+    patched_source = original_source
+    for source_marker in [
+        'public string RuntimeId => "entrypoint-runtime-v1";',
+        'public string RuntimeId => "default-runtime-v2";',
         'public string RuntimeId => "default-runtime-v1";',
-        f'public string RuntimeId => "{marker}";',
-        1,
-    )
+    ]:
+        if source_marker in patched_source:
+            patched_source = patched_source.replace(
+                source_marker,
+                f'public string RuntimeId => "{marker}";',
+                1,
+            )
+            break
 
     watcher: subprocess.Popen[str] | None = None
     try:

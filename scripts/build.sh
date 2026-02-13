@@ -40,7 +40,7 @@ CSC_BIN="${CSC_BIN:-csc}"
   -r:"$OUT_DIR/OniAiAssistant.dll" \
   -r:"$MANAGED_DIR/netstandard.dll" \
   -r:"$MANAGED_DIR/UnityEngine.CoreModule.dll" \
-  "$RUNTIME_DIR/OniAiRuntime.cs"
+  "$RUNTIME_DIR"/*.cs
 
 echo "Build output: $OUT_DIR/OniAiAssistant.dll"
 echo "Build output: $OUT_DIR/OniAiRuntime.dll"

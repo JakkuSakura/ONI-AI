@@ -102,9 +102,14 @@ cd ~/Dev/ONI-AI
 ./scripts/hot_reload_runtime.sh
 ```
 
-3. Edit `runtime/OniAiRuntime.cs`.
+3. Edit runtime source files under `runtime/` (for example `runtime/EntryPoint.cs`, `runtime/RuntimeHooks.cs`).
 4. On save, the script rebuilds and copies `OniAiRuntime.dll` to the installed mod runtime directory.
 5. The host mod reloads it automatically (default check interval: 1s).
+
+Runtime DLL hooks cover trigger/tick/config logic, so you can iterate without restarting ONI for those behaviors:
+
+- Runtime tick/trigger behavior (`OnTick`, `HandleTrigger`)
+- Runtime config reload callback (`OnConfigReload`)
 
 ### Config hot-reload
 
@@ -117,6 +122,17 @@ Useful config keys for runtime reload:
 - `runtime_dll_path` (default empty -> `runtime/OniAiRuntime.dll` under installed mod dir)
 - `runtime_reload_interval_seconds` (default `1.0`)
 - `request_root_dir` (default empty -> `/tmp/oni_ai_assistant/requests`)
+
+Built-in ONI HTTP APIs (host-level):
+
+- `GET /health`
+- `GET /state`
+- `GET /plan`
+- `GET /actions` and `POST /actions` (task actions)
+- `GET /buildings`
+- `GET /research`
+- `GET /speed` and `POST /speed` (`{"speed":1|2|3}`)
+- `GET /pause` and `POST /pause` (`{"paused":true|false}`)
 
 Built-in ONI-side HTTP server keys:
 
