@@ -2206,7 +2206,6 @@ namespace OniAiAssistant
         private Thread httpThread;
         private bool httpRunning;
         private JObject lastStateSnapshot;
-        private JObject lastExecutionSnapshot;
 
         private void StartHttpServer()
         {
@@ -2535,11 +2534,9 @@ namespace OniAiAssistant
             if (method.Equals("GET", StringComparison.OrdinalIgnoreCase) && path.Equals("/state", StringComparison.Ordinal))
             {
                 JObject state;
-                JObject execution;
                 lock (httpSync)
                 {
                     state = lastStateSnapshot != null ? (JObject)lastStateSnapshot.DeepClone() : null;
-                    execution = lastExecutionSnapshot != null ? (JObject)lastExecutionSnapshot.DeepClone() : null;
                 }
 
                 if (state == null)
@@ -2558,7 +2555,6 @@ namespace OniAiAssistant
                 WriteJsonResponse(context.Response, 200, new JObject
                 {
                     ["state"] = state,
-                    ["last_execution"] = execution,
                     ["pending_action_count"] = pendingCount
                 });
                 return;
@@ -2714,19 +2710,6 @@ namespace OniAiAssistant
             lock (httpSync)
             {
                 lastStateSnapshot = (JObject)state.DeepClone();
-            }
-        }
-
-        private void UpdateLastExecutionSnapshot(JObject execution)
-        {
-            if (execution == null)
-            {
-                return;
-            }
-
-            lock (httpSync)
-            {
-                lastExecutionSnapshot = (JObject)execution.DeepClone();
             }
         }
 
