@@ -2548,97 +2548,13 @@ namespace OniAiAssistant
                 }
             }
 
-            if (path.Equals("/camera", StringComparison.Ordinal))
+            if (path.Equals("/camera", StringComparison.Ordinal)
+                || path.Equals("/build", StringComparison.Ordinal)
+                || path.Equals("/dig", StringComparison.Ordinal)
+                || path.Equals("/deconstruct", StringComparison.Ordinal)
+                || path.Equals("/state", StringComparison.Ordinal))
             {
-                if (method.Equals("GET", StringComparison.OrdinalIgnoreCase))
-                {
-                    JObject cameraState = BuildCameraStatePayload();
-                    if (cameraState == null)
-                    {
-                        WriteJsonResponse(context.Response, 503, new JObject { ["error"] = "camera_unavailable" });
-                        return;
-                    }
-
-                    WriteJsonResponse(context.Response, 200, cameraState);
-                    return;
-                }
-
-                if (method.Equals("POST", StringComparison.OrdinalIgnoreCase))
-                {
-                    CameraRequest payload = ReadRequestBody<CameraRequest>(context.Request);
-                    if (payload == null)
-                    {
-                        WriteJsonResponse(context.Response, 400, new JObject { ["error"] = "invalid_json" });
-                        return;
-                    }
-
-                    JObject applied = ApplyCameraRequest(payload);
-                    if (applied == null)
-                    {
-                        WriteJsonResponse(context.Response, 503, new JObject { ["error"] = "camera_unavailable" });
-                        return;
-                    }
-
-                    applied["status"] = "applied";
-                    WriteJsonResponse(context.Response, 200, applied);
-                    return;
-                }
-            }
-
-            if (method.Equals("POST", StringComparison.OrdinalIgnoreCase) && path.Equals("/build", StringComparison.Ordinal))
-            {
-                JObject payload = ReadRequestBody<JObject>(context.Request);
-                if (payload == null)
-                {
-                    WriteJsonResponse(context.Response, 400, new JObject { ["error"] = "invalid_json" });
-                    return;
-                }
-
-                string message = ApplyBuildAction(payload);
-
-                WriteJsonResponse(context.Response, 200, new JObject
-                {
-                    ["status"] = "applied",
-                    ["message"] = message
-                });
-                return;
-            }
-
-            if (method.Equals("POST", StringComparison.OrdinalIgnoreCase) && path.Equals("/dig", StringComparison.Ordinal))
-            {
-                JObject payload = ReadRequestBody<JObject>(context.Request);
-                if (payload == null)
-                {
-                    WriteJsonResponse(context.Response, 400, new JObject { ["error"] = "invalid_json" });
-                    return;
-                }
-
-                string message = ApplyDigAction(payload);
-
-                WriteJsonResponse(context.Response, 200, new JObject
-                {
-                    ["status"] = "applied",
-                    ["message"] = message
-                });
-                return;
-            }
-
-            if (method.Equals("POST", StringComparison.OrdinalIgnoreCase) && path.Equals("/deconstruct", StringComparison.Ordinal))
-            {
-                JObject payload = ReadRequestBody<JObject>(context.Request);
-                if (payload == null)
-                {
-                    WriteJsonResponse(context.Response, 400, new JObject { ["error"] = "invalid_json" });
-                    return;
-                }
-
-                string message = ApplyDeconstructAction(payload);
-
-                WriteJsonResponse(context.Response, 200, new JObject
-                {
-                    ["status"] = "applied",
-                    ["message"] = message
-                });
+                WriteJsonResponse(context.Response, 503, new JObject { ["error"] = "runtime_unavailable" });
                 return;
             }
 
@@ -2657,51 +2573,6 @@ namespace OniAiAssistant
                 {
                     ["status"] = "applied",
                     ["message"] = message
-                });
-                return;
-            }
-
-            if (method.Equals("GET", StringComparison.OrdinalIgnoreCase) && path.Equals("/state", StringComparison.Ordinal))
-            {
-                JObject state = null;
-                try
-                {
-                    int previousSpeed = 1;
-                    if (ReadLiveSpeedControlState(out int liveSpeed, out bool _))
-                    {
-                        previousSpeed = Mathf.Clamp(liveSpeed, 1, 3);
-                    }
-
-                    string requestId = "state_" + System.DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
-                    state = BuildStatePayload(requestId, previousSpeed, string.Empty);
-                    string apiBaseUrl = BuildApiBaseUrl();
-                    if (!string.IsNullOrWhiteSpace(apiBaseUrl))
-                    {
-                        state["api_base_url"] = apiBaseUrl.TrimEnd('/');
-                    }
-                }
-                catch (Exception exception)
-                {
-                    LogWarning("Failed to build /state snapshot error=" + exception.Message);
-                }
-
-                if (state == null)
-                {
-                    WriteJsonResponse(context.Response, 503, new JObject { ["error"] = "state_snapshot_unavailable" });
-                    return;
-                }
-
-                int pendingCount = 0;
-                JArray pendingFromState = state["pending_actions"] as JArray;
-                if (pendingFromState != null)
-                {
-                    pendingCount = pendingFromState.Count;
-                }
-
-                WriteJsonResponse(context.Response, 200, new JObject
-                {
-                    ["state"] = state,
-                    ["pending_action_count"] = pendingCount
                 });
                 return;
             }
