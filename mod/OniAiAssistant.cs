@@ -13,7 +13,6 @@ using KMod;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
-using UnityEngine.Networking;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
@@ -74,6 +73,9 @@ namespace OniAiAssistant
         private bool runtimeMissingLogged;
         private long configLastWriteTicks;
         private float nextConfigReloadCheckAt;
+        private MethodInfo chatLogMethod;
+        private object chatLogTarget;
+        private bool chatLogProbeAttempted;
 
         public static void EnsureInstance()
         {
@@ -94,7 +96,7 @@ namespace OniAiAssistant
             CreateNativeUiButton();
             ReloadRuntime(true);
             StartHttpServer();
-            Debug.Log("[ONI-AI] Controller initialized");
+            LogInfo("Controller initialized", pushToChat: true);
         }
 
         private void Update()
@@ -107,7 +109,6 @@ namespace OniAiAssistant
             ReloadConfig(false);
 
             ReloadRuntime(false);
-
 
             if (runtimeHook != null)
             {
@@ -183,28 +184,144 @@ namespace OniAiAssistant
 
         public void TriggerDefaultAiRequest()
         {
-            if (isBusy)
-            {
-                return;
-            }
-
-            ShowInGameMessage("ONI AI: analyzing colony...");
-            StartCoroutine(RunAiCycle());
+            PublishInfo("ONI AI bridge trigger is disabled");
+            LogInfo("TriggerDefaultAiRequest ignored: RunAiCycle removed", pushToChat: true);
         }
 
         public void PublishInfo(string text)
         {
             ShowInGameMessage(text, new Color(0.86f, 0.94f, 1.00f, 1.00f), 2.0f);
+            PushLogToChat(text);
         }
 
         public void PublishSuccess(string text)
         {
             ShowInGameMessage(text, new Color(0.70f, 1.00f, 0.75f, 1.00f), 2.5f);
+            PushLogToChat(text);
         }
 
         public void PublishError(string text)
         {
             ShowInGameMessage(text, new Color(1.00f, 0.70f, 0.70f, 1.00f), 4.0f);
+            PushLogToChat(text);
+        }
+
+        private void LogInfo(string message, bool pushToChat = false)
+        {
+            Debug.Log("[ONI-AI] " + message);
+            if (pushToChat)
+            {
+                PushLogToChat(message);
+            }
+        }
+
+        private void LogWarning(string message, bool pushToChat = false)
+        {
+            Debug.LogWarning("[ONI-AI] " + message);
+            if (pushToChat)
+            {
+                PushLogToChat("warning: " + message);
+            }
+        }
+
+        private void LogError(string message, bool pushToChat = true)
+        {
+            Debug.LogError("[ONI-AI] " + message);
+            if (pushToChat)
+            {
+                PushLogToChat("error: " + message);
+            }
+        }
+
+        private void ReportError(string logMessage, string userMessage)
+        {
+            LogError(logMessage);
+            if (!string.IsNullOrWhiteSpace(userMessage))
+            {
+                PublishError(userMessage);
+            }
+        }
+
+        private void PushLogToChat(string text)
+        {
+            if (config == null || !config.EnableChatLogMirror || string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            if (!TryResolveChatMethod())
+            {
+                return;
+            }
+
+            try
+            {
+                ParameterInfo[] parameters = chatLogMethod.GetParameters();
+                string normalized = text.Trim();
+
+                if (parameters.Length == 1 && parameters[0].ParameterType == typeof(string))
+                {
+                    chatLogMethod.Invoke(chatLogTarget, new object[] { "[ONI-AI] " + normalized });
+                    return;
+                }
+
+                if (parameters.Length == 2 && parameters[0].ParameterType == typeof(string) && parameters[1].ParameterType == typeof(string))
+                {
+                    chatLogMethod.Invoke(chatLogTarget, new object[] { "ONI-AI", normalized });
+                    return;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private bool TryResolveChatMethod()
+        {
+            if (chatLogMethod != null)
+            {
+                return true;
+            }
+
+            if (chatLogProbeAttempted)
+            {
+                return false;
+            }
+
+            chatLogProbeAttempted = true;
+
+            foreach (MonoBehaviour behaviour in Resources.FindObjectsOfTypeAll<MonoBehaviour>())
+            {
+                if (behaviour == null)
+                {
+                    continue;
+                }
+
+                Type type = behaviour.GetType();
+                string fullName = type.FullName ?? string.Empty;
+                if (fullName.IndexOf("ChatScreen", StringComparison.Ordinal) < 0)
+                {
+                    continue;
+                }
+
+                const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+                MethodInfo method = type.GetMethods(flags).FirstOrDefault(candidate =>
+                    string.Equals(candidate.Name, "AddMessage", StringComparison.Ordinal)
+                    || string.Equals(candidate.Name, "logMessage", StringComparison.Ordinal)
+                    || string.Equals(candidate.Name, "QueueMessage", StringComparison.Ordinal));
+
+                if (method == null)
+                {
+                    continue;
+                }
+
+                chatLogTarget = behaviour;
+                chatLogMethod = method;
+                LogInfo("Chat bridge attached type=" + fullName + " method=" + method.Name);
+                return true;
+            }
+
+            return false;
         }
 
         private bool InvokeRuntimeMethod(string methodName, object[] args, out object result)
@@ -508,59 +625,6 @@ namespace OniAiAssistant
             }
         }
 
-        private IEnumerator RunAiCycle()
-        {
-            SetBusyUiState(true);
-
-            try
-            {
-                var speedControl = SpeedControlScreen.Instance;
-                int previousSpeed = speedControl != null ? Mathf.Clamp(speedControl.GetSpeed(), 1, 3) : 1;
-                bool wasPaused = speedControl != null && speedControl.IsPaused;
-
-                PauseGame(speedControl);
-                yield return new WaitForEndOfFrame();
-
-                var requestContext = PrepareRequestSnapshot(previousSpeed);
-
-                string aiResponse = string.Empty;
-                bool httpOk = false;
-                yield return SendToBridge(requestContext.PayloadJson, result =>
-                {
-                    aiResponse = result.Response;
-                    httpOk = result.Ok;
-                });
-
-                if (aiResponse == null)
-                {
-                    throw new InvalidOperationException("Bridge response is null");
-                }
-
-                WriteTextSafe(Path.Combine(requestContext.RequestDir, "logs", "bridge_response_raw.txt"), aiResponse);
-
-                if (!httpOk)
-                {
-                    WriteTextSafe(Path.Combine(requestContext.RequestDir, "bridge_error.txt"), "Request failed or timed out");
-                    throw new InvalidOperationException("Bridge request failed or timed out");
-                }
-
-                if (wasPaused)
-                {
-                    PauseGame(speedControl);
-                }
-                else
-                {
-                    ResumeGame(speedControl, previousSpeed);
-                }
-
-                ShowInGameMessage("ONI AI: request sent", new Color(0.70f, 1.00f, 0.75f, 1.00f), 2.5f);
-            }
-            finally
-            {
-                SetBusyUiState(false);
-            }
-        }
-
         private void ShowInGameMessage(string text)
         {
             ShowInGameMessage(text, new Color(0.86f, 0.94f, 1.00f, 1.00f), 2.0f);
@@ -663,35 +727,6 @@ namespace OniAiAssistant
 
             speedControl.Unpause(false);
             speedControl.SetSpeed(Mathf.Clamp(speed, 1, 3));
-        }
-
-        private RequestContext PrepareRequestSnapshot(int previousSpeed)
-        {
-            string timestamp = System.DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
-            string requestId = timestamp + "_" + UnityEngine.Random.Range(1000, 9999).ToString(CultureInfo.InvariantCulture);
-            string requestRoot = GetRequestRootDirectory();
-            string requestDir = Path.Combine(requestRoot, requestId);
-            string logsDir = Path.Combine(requestDir, "logs");
-
-            Directory.CreateDirectory(requestDir);
-            Directory.CreateDirectory(logsDir);
-
-            string screenshotPath = Path.Combine(requestDir, "screenshot.png");
-            ScreenCapture.CaptureScreenshot(screenshotPath);
-
-            string screenshotRelativePath = "screenshot.png";
-
-            JObject state = BuildStatePayload(requestId, previousSpeed, screenshotRelativePath);
-            string apiBaseUrl = BuildApiBaseUrl();
-            JObject bridgePayload = BuildBridgePayload(state, requestDir, apiBaseUrl);
-            UpdateLastStateSnapshot(state);
-
-            return new RequestContext
-            {
-                RequestId = requestId,
-                RequestDir = requestDir,
-                PayloadJson = bridgePayload.ToString(Formatting.None)
-            };
         }
 
         private string BuildApiBaseUrl()
@@ -1266,29 +1301,6 @@ namespace OniAiAssistant
             }
 
             return value.ToString();
-        }
-
-        private IEnumerator SendToBridge(string payload, Action<BridgeResult> onComplete)
-        {
-            var bytes = Encoding.UTF8.GetBytes(payload);
-            using (var request = new UnityWebRequest(config.BridgeUrl, UnityWebRequest.kHttpVerbPOST))
-            {
-                request.uploadHandler = new UploadHandlerRaw(bytes);
-                request.downloadHandler = new DownloadHandlerBuffer();
-                request.SetRequestHeader("Content-Type", "application/json");
-                request.timeout = Mathf.Clamp(config.RequestTimeoutSeconds, 5, 600);
-
-                yield return request.SendWebRequest();
-
-                if (request.result != UnityWebRequest.Result.Success)
-                {
-                    Debug.LogWarning("[ONI-AI] Request error: " + request.error);
-                    onComplete(new BridgeResult(false, string.Empty));
-                    yield break;
-                }
-
-                onComplete(new BridgeResult(true, request.downloadHandler.text));
-            }
         }
 
         private static string ApplyDuplicantStatusUpdate(JObject parameters)
@@ -2176,24 +2188,10 @@ namespace OniAiAssistant
             };
         }
 
-        private static JObject BuildBridgePayload(JObject state, string requestDir, string apiBaseUrl)
-        {
-            JObject bridgePayload = (JObject)state.DeepClone();
-            bridgePayload["request_dir"] = requestDir;
-
-            if (!string.IsNullOrWhiteSpace(apiBaseUrl))
-            {
-                string normalizedApiBaseUrl = apiBaseUrl.TrimEnd('/');
-                bridgePayload["api_base_url"] = normalizedApiBaseUrl;
-            }
-
-            return bridgePayload;
-        }
         private readonly object httpSync = new object();
         private HttpListener httpListener;
         private Thread httpThread;
         private bool httpRunning;
-        private JObject lastStateSnapshot;
 
         private void StartHttpServer()
         {
@@ -2546,15 +2544,31 @@ namespace OniAiAssistant
 
             if (method.Equals("GET", StringComparison.OrdinalIgnoreCase) && path.Equals("/state", StringComparison.Ordinal))
             {
-                JObject state;
-                lock (httpSync)
+                JObject state = null;
+                try
                 {
-                    state = lastStateSnapshot != null ? (JObject)lastStateSnapshot.DeepClone() : null;
+                    int previousSpeed = 1;
+                    if (ReadLiveSpeedControlState(out int liveSpeed, out bool _))
+                    {
+                        previousSpeed = Mathf.Clamp(liveSpeed, 1, 3);
+                    }
+
+                    string requestId = "state_" + System.DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
+                    state = BuildStatePayload(requestId, previousSpeed, string.Empty);
+                    string apiBaseUrl = BuildApiBaseUrl();
+                    if (!string.IsNullOrWhiteSpace(apiBaseUrl))
+                    {
+                        state["api_base_url"] = apiBaseUrl.TrimEnd('/');
+                    }
+                }
+                catch (Exception exception)
+                {
+                    LogWarning("Failed to build /state snapshot error=" + exception.Message);
                 }
 
                 if (state == null)
                 {
-                    WriteJsonResponse(context.Response, 404, new JObject { ["error"] = "no_state" });
+                    WriteJsonResponse(context.Response, 503, new JObject { ["error"] = "state_snapshot_unavailable" });
                     return;
                 }
 
@@ -2714,19 +2728,6 @@ namespace OniAiAssistant
             }
         }
 
-        private void UpdateLastStateSnapshot(JObject state)
-        {
-            if (state == null)
-            {
-                return;
-            }
-
-            lock (httpSync)
-            {
-                lastStateSnapshot = (JObject)state.DeepClone();
-            }
-        }
-
         private static bool BuildBuildingCatalog(out JObject catalog)
         {
             catalog = null;
@@ -2739,6 +2740,57 @@ namespace OniAiAssistant
             if (!(GetStaticMemberValue(assetsType, "BuildingDefs") is IEnumerable collection))
             {
                 return false;
+            }
+
+            var categoryByBuildingId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (FindRuntimeType("BUILDINGS") is Type buildingsType && GetStaticMemberValue(buildingsType, "PLANORDER") is IEnumerable planOrder)
+            {
+                foreach (object planInfo in planOrder)
+                {
+                    if (planInfo == null)
+                    {
+                        continue;
+                    }
+
+                    object categoryValue = GetMemberValue(planInfo, "category");
+                    if (categoryValue == null)
+                    {
+                        continue;
+                    }
+
+                    string category = categoryValue.ToString();
+                    if (string.IsNullOrWhiteSpace(category))
+                    {
+                        continue;
+                    }
+
+                    if (!(GetMemberValue(planInfo, "buildingAndSubcategoryData") is IEnumerable entries))
+                    {
+                        continue;
+                    }
+
+                    foreach (object entry in entries)
+                    {
+                        if (entry == null)
+                        {
+                            continue;
+                        }
+
+                        object keyValue = GetMemberValue(entry, "Key");
+                        if (keyValue == null)
+                        {
+                            continue;
+                        }
+
+                        string buildingId = keyValue.ToString();
+                        if (string.IsNullOrWhiteSpace(buildingId))
+                        {
+                            continue;
+                        }
+
+                        categoryByBuildingId[buildingId] = category;
+                    }
+                }
             }
 
             var lockedByTech = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2826,19 +2878,27 @@ namespace OniAiAssistant
                     throw new InvalidOperationException("BuildingDef missing boolean Deprecated for id=" + id);
                 }
 
-                bool unlocked = showInBuildMenu && !deprecated && !lockedByTech.Contains(id);
-
-                object categoryValue = GetMemberValue(item, "Category");
-                if (categoryValue == null)
+                if (!categoryByBuildingId.TryGetValue(id, out string category) || string.IsNullOrWhiteSpace(category))
                 {
-                    throw new InvalidOperationException("BuildingDef missing Category for id=" + id);
+                    if (string.Equals(id, "AdvancedApothecary", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Debug.LogWarning("[ONI-AI] AdvancedApothecary excluded from /buildings: not present in TUNING.BUILDINGS.PLANORDER (deprecated="
+                            + deprecated.ToString()
+                            + ", showInBuildMenu="
+                            + showInBuildMenu.ToString()
+                            + ")");
+                    }
+
+                    continue;
                 }
+
+                bool unlocked = showInBuildMenu && !deprecated && !lockedByTech.Contains(id);
 
                 var row = new JObject
                 {
                     ["id"] = id,
                     ["name"] = name,
-                    ["category"] = categoryValue.ToString()
+                    ["category"] = category
                 };
 
                 potential.Add(row);
@@ -2980,35 +3040,7 @@ namespace OniAiAssistant
             speed = Mathf.Clamp(speedControl.GetSpeed(), 1, 3);
             return true;
         }
-        private RequestContext CreateHttpActionContext()
-        {
-            string timestamp = System.DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
-            string requestId = "http_" + timestamp;
-            string requestDir = Path.Combine(GetRequestRootDirectory(), requestId);
-            string logsDir = Path.Combine(requestDir, "logs");
-            Directory.CreateDirectory(logsDir);
-
-            return new RequestContext
-            {
-                RequestId = requestId,
-                RequestDir = requestDir,
-                PayloadJson = string.Empty
-            };
-        }
-        private readonly struct BridgeResult
-        {
-            public BridgeResult(bool ok, string response)
-            {
-                Ok = ok;
-                Response = response;
-            }
-
-            public bool Ok { get; }
-
-            public string Response { get; }
-        }
-
-                        private sealed class SpeedRequest
+        private sealed class SpeedRequest
         {
             [JsonProperty("speed")]
             public int Speed { get; set; }
@@ -3035,14 +3067,6 @@ namespace OniAiAssistant
             public List<PriorityUpdateRequest> Priorities { get; set; }
         }
 
-        private sealed class RequestContext
-        {
-            public string RequestId { get; set; }
-
-            public string RequestDir { get; set; }
-
-            public string PayloadJson { get; set; }
-        }
     }
 
     public sealed class OniAiConfig
@@ -3066,6 +3090,8 @@ namespace OniAiAssistant
         public string HttpServerHost { get; private set; } = "127.0.0.1";
 
         public int HttpServerPort { get; private set; } = 8766;
+
+        public bool EnableChatLogMirror { get; private set; } = true;
 
         public static OniAiConfig Load()
         {
@@ -3177,6 +3203,16 @@ namespace OniAiAssistant
                     if (int.TryParse(value, out int port) && port >= 1 && port <= 65535)
                     {
                         config.HttpServerPort = port;
+                    }
+
+                    continue;
+                }
+
+                if (key.Equals("enable_chat_log_mirror", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (bool.TryParse(value, out bool enabled))
+                    {
+                        config.EnableChatLogMirror = enabled;
                     }
                 }
             }

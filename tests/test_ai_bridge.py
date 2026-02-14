@@ -1,8 +1,31 @@
 import json
 import os
+import socket
+import threading
+import time
 from pathlib import Path
+from urllib import request
 
+import oni_ai.ai_bridge as ai_bridge
 from oni_ai.ai_bridge import build_prompt, call_codex_exec, normalize_action, strip_fence
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _http_json(url: str, method: str = "GET", body: dict | None = None) -> tuple[int, dict]:
+    payload_bytes = None
+    headers = {}
+    if body is not None:
+        payload_bytes = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    req = request.Request(url, method=method, data=payload_bytes, headers=headers)
+    with request.urlopen(req, timeout=5) as response:
+        return int(response.getcode()), json.loads(response.read().decode("utf-8"))
 
 
 def test_strip_fence_json_block() -> None:
@@ -148,3 +171,107 @@ def test_call_codex_exec_prefers_output_last_message_file(tmp_path: Path) -> Non
 
     assert parsed["actions"][0]["id"] == "from_last"
     assert parsed["actions"][0]["params"]["speed"] == 3
+
+
+def test_call_codex_exec_timeout_disabled_allows_long_running_stub(tmp_path: Path) -> None:
+    request_dir = tmp_path / "request"
+    request_dir.mkdir(parents=True)
+
+    stub = tmp_path / "fake-codex.sh"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "sleep 1\n"
+        "echo '{\"actions\":[{\"id\":\"slow_ok\",\"type\":\"set_speed\",\"params\":{\"speed\":2}}]}'\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+
+    os.environ["ONI_AI_CODEX_CMD"] = str(stub)
+    os.environ["ONI_AI_CODEX_TIMEOUT_SECONDS"] = "0"
+    try:
+        parsed = json.loads(call_codex_exec({"request_dir": str(request_dir)}))
+    finally:
+        os.environ.pop("ONI_AI_CODEX_CMD", None)
+        os.environ.pop("ONI_AI_CODEX_TIMEOUT_SECONDS", None)
+
+    assert parsed["actions"][0]["id"] == "slow_ok"
+
+
+def test_analyze_endpoint_is_async_with_status_polling(monkeypatch, tmp_path: Path) -> None:
+    ai_bridge.reset_runtime_state_for_tests()
+
+    def fake_call_codex_exec(payload: dict, request_tag: str = "-") -> str:
+        return '{"actions":[{"id":"job-1","type":"set_speed","params":{"speed":1}}]}'
+
+    monkeypatch.setattr(ai_bridge, "call_codex_exec", fake_call_codex_exec)
+
+    port = _find_free_port()
+    server = ai_bridge.HTTPServer(("127.0.0.1", port), ai_bridge.OniAiHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        request_dir = tmp_path / "request"
+        request_dir.mkdir(parents=True)
+        payload = {
+            "request_id": "async_test_001",
+            "request_dir": str(request_dir),
+            "api_base_url": "http://127.0.0.1:8766",
+        }
+
+        status_code, submit = _http_json(f"http://127.0.0.1:{port}/analyze", method="POST", body=payload)
+        assert status_code == 202
+        assert submit["status"] == "queued"
+        assert submit["progress"] == 0
+        assert isinstance(submit.get("job_id"), str)
+        assert submit["status_url"].startswith("/analyze/")
+
+        poll_url = f"http://127.0.0.1:{port}{submit['status_url']}"
+        final = None
+        for _ in range(40):
+            _, current = _http_json(poll_url)
+            if current["status"] in {"completed", "failed"}:
+                final = current
+                break
+            time.sleep(0.05)
+
+        assert final is not None
+        assert final["status"] == "completed"
+        assert final["progress"] == 100
+        parsed_response = json.loads(final["response"])
+        assert parsed_response["actions"][0]["id"] == "job-1"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_analyze_endpoint_accepts_trailing_slash(monkeypatch, tmp_path: Path) -> None:
+    ai_bridge.reset_runtime_state_for_tests()
+
+    def fake_call_codex_exec(payload: dict, request_tag: str = "-") -> str:
+        return '{"actions":[]}'
+
+    monkeypatch.setattr(ai_bridge, "call_codex_exec", fake_call_codex_exec)
+
+    port = _find_free_port()
+    server = ai_bridge.HTTPServer(("127.0.0.1", port), ai_bridge.OniAiHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        request_dir = tmp_path / "request_trailing"
+        request_dir.mkdir(parents=True)
+        payload = {
+            "request_id": "async_test_slash_001",
+            "request_dir": str(request_dir),
+        }
+
+        status_code, submit = _http_json(f"http://127.0.0.1:{port}/analyze/", method="POST", body=payload)
+        assert status_code == 202
+        assert submit["status"] == "queued"
+        assert isinstance(submit.get("job_id"), str)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

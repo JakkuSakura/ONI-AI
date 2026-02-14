@@ -54,7 +54,7 @@ Optional env vars:
 
 - `ONI_AI_CODEX_CMD` (default: `codex`)
 - `ONI_AI_CODEX_SKIP_GIT_REPO_CHECK` (default: `1`, adds `--skip-git-repo-check` to `codex exec`)
-- `ONI_AI_CODEX_TIMEOUT_SECONDS` (default: `90`)
+- `ONI_AI_CODEX_TIMEOUT_SECONDS` (default: `0`, disables timeout; set a positive seconds value to enforce timeout)
 - `ONI_AI_PROMPT` (custom decision prompt for `codex exec`)
 - `ONI_AI_BRIDGE_HOST` (default: `127.0.0.1`)
 - `ONI_AI_BRIDGE_PORT` (default: `8765`)

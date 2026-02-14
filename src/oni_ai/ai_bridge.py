@@ -11,6 +11,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 LOGGER = logging.getLogger("oni_ai")
@@ -21,6 +22,8 @@ RUNTIME_STATE: dict[str, object] = {
     "last_response": None,
     "manual_actions": [],
 }
+JOB_STATE_LOCK = threading.Lock()
+JOB_STATE: dict[str, dict[str, object]] = {}
 
 
 def is_truthy_env(var_name: str, default: bool) -> bool:
@@ -102,6 +105,85 @@ def reset_runtime_state_for_tests() -> None:
         RUNTIME_STATE["last_request"] = None
         RUNTIME_STATE["last_response"] = None
         RUNTIME_STATE["manual_actions"] = []
+
+    with JOB_STATE_LOCK:
+        JOB_STATE.clear()
+
+
+def create_job(payload: dict, trace_id: str) -> dict[str, object]:
+    job_id = uuid.uuid4().hex
+    request_tag = str(payload.get("request_id", "")).strip() or trace_id
+    request_dir = str(payload.get("request_dir", "")).strip()
+    now = time.time()
+
+    job = {
+        "job_id": job_id,
+        "request_id": request_tag,
+        "request_dir": request_dir,
+        "status": "queued",
+        "progress": 0,
+        "created_at": now,
+        "started_at": None,
+        "finished_at": None,
+        "response": None,
+        "summary": None,
+        "error": None,
+    }
+
+    with JOB_STATE_LOCK:
+        JOB_STATE[job_id] = job
+
+    return job
+
+
+def set_job_state(job_id: str, **updates: object) -> None:
+    with JOB_STATE_LOCK:
+        job = JOB_STATE.get(job_id)
+        if job is None:
+            return
+        job.update(updates)
+
+
+def get_job_state(job_id: str) -> dict[str, object] | None:
+    with JOB_STATE_LOCK:
+        job = JOB_STATE.get(job_id)
+        if job is None:
+            return None
+        return dict(job)
+
+
+def run_job(job_id: str, payload: dict) -> None:
+    job = get_job_state(job_id)
+    if job is None:
+        return
+
+    request_tag = str(job.get("request_id") or "-")
+    set_job_state(job_id, status="running", progress=5, started_at=time.time())
+
+    try:
+        command = call_codex_exec(payload, request_tag=request_tag)
+        if not isinstance(command, str) or not command.strip():
+            command = json.dumps({"actions": []}, ensure_ascii=False)
+
+        set_last_analyze_payload(payload, command)
+        set_job_state(
+            job_id,
+            status="completed",
+            progress=100,
+            response=command,
+            summary=summarize_actions(command),
+            finished_at=time.time(),
+        )
+        LOGGER.info("request=%s job=%s completed summary=%s", request_tag, job_id, summarize_actions(command))
+    except Exception as exc:  # defensive outer layer for worker
+        LOGGER.exception("request=%s job=%s failed", request_tag, job_id)
+        set_job_state(
+            job_id,
+            status="failed",
+            progress=100,
+            error=str(exc),
+            finished_at=time.time(),
+        )
 
 
 def strip_fence(text: str) -> str:
@@ -336,7 +418,18 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
         codex_cmd_parts = ["codex"]
 
     skip_git_repo_check = is_truthy_env("ONI_AI_CODEX_SKIP_GIT_REPO_CHECK", True)
-    timeout_seconds = int(os.getenv("ONI_AI_CODEX_TIMEOUT_SECONDS", "90"))
+    timeout_raw = (os.getenv("ONI_AI_CODEX_TIMEOUT_SECONDS", "0") or "0").strip()
+    try:
+        timeout_seconds = int(timeout_raw)
+    except ValueError:
+        LOGGER.warning(
+            "request=%s invalid ONI_AI_CODEX_TIMEOUT_SECONDS=%s; using 0 (disabled)",
+            request_tag,
+            timeout_raw,
+        )
+        timeout_seconds = 0
+    if timeout_seconds < 0:
+        timeout_seconds = 0
     codex_sandbox_mode = os.getenv("ONI_AI_CODEX_SANDBOX", "danger-full-access").strip() or "danger-full-access"
 
 
@@ -353,10 +446,10 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
     last_message_path = logs_dir / "codex_last_message.json"
 
     LOGGER.info(
-        "request=%s invoking codex cmd=%s timeout=%ss request_dir=%s has_screenshot=%s skip_git_repo_check=%s sandbox=%s",
+        "request=%s invoking codex cmd=%s timeout=%s request_dir=%s has_screenshot=%s skip_git_repo_check=%s sandbox=%s",
         request_tag,
         shlex.join(codex_cmd_parts),
-        timeout_seconds,
+        f"{timeout_seconds}s" if timeout_seconds > 0 else "disabled",
         request_dir,
         has_screenshot,
         skip_git_repo_check,
@@ -393,6 +486,7 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
 
         stream.close()
 
+    timed_out = False
     try:
         process = subprocess.Popen(
             command,
@@ -407,9 +501,11 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
         stdout_thread.start()
         stderr_thread.start()
 
-        timed_out = False
         try:
-            process.wait(timeout=timeout_seconds)
+            if timeout_seconds > 0:
+                process.wait(timeout=timeout_seconds)
+            else:
+                process.wait()
         except subprocess.TimeoutExpired:
             timed_out = True
             LOGGER.error("request=%s codex timed out after %ss; terminating process", request_tag, timeout_seconds)
@@ -454,10 +550,24 @@ def call_codex_exec(payload: dict, request_tag: str = "-") -> str:
 
     raw_last_message = read_last_message_output(last_message_path, request_tag)
 
+    if timed_out:
+        raise RuntimeError(f"codex_timed_out timeout_seconds={timeout_seconds} return_code={return_code}")
+
     if return_code != 0:
         combined = raw_last_message or (stdout_text + "\n" + stderr_text)
         normalized = normalize_action(combined, request_tag=request_tag)
         LOGGER.info("request=%s normalized nonzero-exit output => %s", request_tag, summarize_actions(normalized))
+
+        try:
+            parsed = json.loads(normalized)
+            actions = parsed.get("actions")
+            action_count = len(actions) if isinstance(actions, list) else 0
+        except json.JSONDecodeError:
+            action_count = 0
+
+        if action_count <= 0:
+            raise RuntimeError(f"codex_nonzero_exit return_code={return_code} without actionable output")
+
         return normalized
 
     normalized = normalize_action(raw_last_message or stdout_text, request_tag=request_tag)
@@ -476,13 +586,28 @@ class OniAiHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         trace_id = uuid.uuid4().hex[:8]
+        path = urlsplit(self.path).path
 
-        if self.path == "/health":
+        if path.startswith("/analyze/"):
+            job_id = path[len("/analyze/") :].strip("/").strip()
+            if not job_id:
+                self.send_json(400, {"error": "job_id_required"})
+                return
+
+            job = get_job_state(job_id)
+            if job is None:
+                self.send_json(404, {"error": "job_not_found", "job_id": job_id})
+                return
+
+            self.send_json(200, job)
+            return
+
+        if path == "/health":
             uptime_seconds = int(time.monotonic() - SERVER_STARTED_AT)
             self.send_json(200, {"ok": True, "service": "oni_ai", "uptime_seconds": uptime_seconds})
             return
 
-        if self.path == "/state":
+        if path == "/state":
             snapshot = get_runtime_state_snapshot()
             last_request = snapshot.get("last_request")
             if last_request is None:
@@ -492,7 +617,7 @@ class OniAiHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"state": last_request})
             return
 
-        if self.path == "/actions":
+        if path == "/actions":
             snapshot = get_runtime_state_snapshot()
             response_actions = []
             last_response = snapshot.get("last_response")
@@ -508,15 +633,16 @@ class OniAiHandler(BaseHTTPRequestHandler):
             )
             return
 
-        LOGGER.warning("trace=%s path=%s method=GET => 404", trace_id, self.path)
+        LOGGER.warning("trace=%s path=%s method=GET => 404", trace_id, path)
         self.send_response(404)
         self.end_headers()
 
     def do_POST(self):
         started_at = time.monotonic()
         trace_id = uuid.uuid4().hex[:8]
+        path = urlsplit(self.path).path
 
-        if self.path == "/actions":
+        if path == "/actions":
             content_length = int(self.headers.get("Content-Length", "0"))
             raw_body = self.rfile.read(content_length)
             try:
@@ -544,14 +670,14 @@ class OniAiHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"accepted": len(normalized_actions)})
             return
 
-        if self.path != "/analyze":
-            LOGGER.warning("trace=%s path=%s method=POST => 404", trace_id, self.path)
+        if path.rstrip("/") != "/analyze":
+            LOGGER.warning("trace=%s path=%s method=POST => 404", trace_id, path)
             self.send_response(404)
             self.end_headers()
             return
 
         content_length = int(self.headers.get("Content-Length", "0"))
-        LOGGER.info("trace=%s incoming request path=%s content_length=%s", trace_id, self.path, content_length)
+        LOGGER.info("trace=%s incoming request path=%s content_length=%s", trace_id, path, content_length)
         raw_body = self.rfile.read(content_length)
         LOGGER.debug("trace=%s raw_body_preview=%s", trace_id, preview_text(raw_body.decode("utf-8", errors="replace"), 400))
 
@@ -574,27 +700,35 @@ class OniAiHandler(BaseHTTPRequestHandler):
             request_dir,
         )
 
-        command = call_codex_exec(payload, request_tag=request_tag)
-        if not isinstance(command, str) or not command.strip():
-            command = json.dumps({"actions": []}, ensure_ascii=False)
+        job = create_job(payload, trace_id)
+        job_id = str(job["job_id"])
 
-        set_last_analyze_payload(payload, command)
+        worker = threading.Thread(target=run_job, args=(job_id, payload), daemon=True)
+        worker.start()
 
-        body = command.strip().encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        status_payload = {
+            "job_id": job_id,
+            "request_id": request_tag,
+            "status": "queued",
+            "progress": 0,
+            "status_url": f"/analyze/{job_id}",
+        }
+
+        body = json.dumps(status_payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(202)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         LOGGER.info(
-            "trace=%s request=%s response_status=200 response_bytes=%s elapsed_ms=%s summary=%s",
+            "trace=%s request=%s response_status=202 response_bytes=%s elapsed_ms=%s job=%s",
             trace_id,
             request_tag,
             len(body),
             elapsed_ms,
-            summarize_actions(command),
+            job_id,
         )
 
     def log_message(self, fmt, *args):
@@ -613,7 +747,7 @@ def main():
         "Logging configured level=%s codex_cmd_default=%s timeout_default=%s",
         os.getenv("ONI_AI_LOG_LEVEL", "INFO"),
         os.getenv("ONI_AI_CODEX_CMD", "codex").strip() or "codex",
-        os.getenv("ONI_AI_CODEX_TIMEOUT_SECONDS", "90"),
+        os.getenv("ONI_AI_CODEX_TIMEOUT_SECONDS", "0"),
     )
     server.serve_forever()
 
