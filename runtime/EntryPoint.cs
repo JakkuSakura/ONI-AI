@@ -30,5 +30,10 @@ namespace OniAiAssistantRuntime
         {
             return RuntimeHooks.HandleTrigger(controller);
         }
+
+        public bool HandleHttpRequest(OniAiController controller, System.Net.HttpListenerContext context)
+        {
+            return RuntimeHooks.HandleHttpRequest(controller, context);
+        }
     }
 }

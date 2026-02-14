@@ -39,6 +39,7 @@ CSC_BIN="${CSC_BIN:-csc}"
   -out:"$OUT_DIR/OniAiRuntime.dll" \
   -r:"$OUT_DIR/OniAiAssistant.dll" \
   -r:"$MANAGED_DIR/netstandard.dll" \
+  -r:"$MANAGED_DIR/Newtonsoft.Json.dll" \
   -r:"$MANAGED_DIR/UnityEngine.CoreModule.dll" \
   "$RUNTIME_DIR"/*.cs
 

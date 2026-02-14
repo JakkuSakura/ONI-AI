@@ -1002,6 +1002,7 @@ namespace OniAiAssistant
                 {
                     ["id"] = duplicateId,
                     ["name"] = duplicateName,
+                    ["position"] = BuildDuplicantPositionObject(behaviour),
                     ["status"] = BuildDuplicantStatusObject(behaviour),
                     ["priority"] = BuildDuplicantPriorityObject(behaviour),
                     ["skills"] = BuildDuplicantSkillsArray(behaviour)
@@ -1429,7 +1430,7 @@ namespace OniAiAssistant
 
         private string ApplyDigAction(JObject parameters)
         {
-            List<int> cells = ResolveCellsFromParameters(parameters);
+            List<int> cells = ResolveCellsFromParameters(parameters, allowDuplicantFallback: true);
             if (cells.Count == 0)
             {
                 throw new InvalidOperationException("dig requires params.cells");
@@ -1475,7 +1476,7 @@ namespace OniAiAssistant
 
         private string ApplyDeconstructAction(JObject parameters)
         {
-            List<int> cells = ResolveCellsFromParameters(parameters);
+            List<int> cells = ResolveCellsFromParameters(parameters, allowDuplicantFallback: true);
             if (cells.Count == 0)
             {
                 throw new InvalidOperationException("deconstruct requires params.cells");
@@ -1508,7 +1509,7 @@ namespace OniAiAssistant
         {
             string buildingId = RequireNonEmptyString(parameters, "building_id", "build requires non-empty building_id");
 
-            List<int> cells = ResolveCellsFromParameters(parameters);
+            List<int> cells = ResolveCellsFromParameters(parameters, allowDuplicantFallback: false);
             if (cells.Count == 0)
             {
                 throw new InvalidOperationException("build requires params.cells");
@@ -1633,7 +1634,7 @@ namespace OniAiAssistant
             return applied;
         }
 
-        private static List<int> ResolveCellsFromParameters(JObject parameters)
+        private static List<int> ResolveCellsFromParameters(JObject parameters, bool allowDuplicantFallback)
         {
             var result = new List<int>();
 
@@ -1642,19 +1643,92 @@ namespace OniAiAssistant
                 return result;
             }
 
-            JArray cells = parameters["cells"] as JArray;
-            if (cells != null)
+            if (parameters["cells"] is JArray rawCells && rawCells.Count > 0)
             {
-                foreach (JToken token in cells)
+                throw new InvalidOperationException("raw cell ids are not allowed; use params.points with x/y coordinates");
+            }
+
+            AppendCellsFromPointsToken(parameters["points"], result);
+
+            if (parameters["x"] != null && parameters["y"] != null
+                && parameters["x"].Type == JTokenType.Integer
+                && parameters["y"].Type == JTokenType.Integer)
+            {
+                AppendCellFromXY(parameters["x"].Value<int>(), parameters["y"].Value<int>(), result);
+            }
+
+            if (result.Count == 0 && allowDuplicantFallback)
+            {
+                int radius = 2;
+                if (parameters["surrounding_radius"] != null && parameters["surrounding_radius"].Type == JTokenType.Integer)
                 {
-                    if (token.Type == JTokenType.Integer)
-                    {
-                        result.Add(token.Value<int>());
-                    }
+                    radius = Mathf.Clamp(parameters["surrounding_radius"].Value<int>(), 1, 12);
+                }
+
+                foreach ((int x, int y) in BuildSurroundingPointsFromDuplicants(radius))
+                {
+                    AppendCellFromXY(x, y, result);
                 }
             }
 
             return result.Distinct().ToList();
+        }
+
+        private static void AppendCellsFromPointsToken(JToken pointsToken, List<int> output)
+        {
+            if (!(pointsToken is JArray pointsArray))
+            {
+                return;
+            }
+
+            foreach (JToken pointToken in pointsArray)
+            {
+                if (!(pointToken is JObject pointObject))
+                {
+                    continue;
+                }
+
+                if (!pointObject.TryGetValue("x", StringComparison.OrdinalIgnoreCase, out JToken xToken)
+                    || !pointObject.TryGetValue("y", StringComparison.OrdinalIgnoreCase, out JToken yToken)
+                    || xToken.Type != JTokenType.Integer
+                    || yToken.Type != JTokenType.Integer)
+                {
+                    continue;
+                }
+
+                AppendCellFromXY(xToken.Value<int>(), yToken.Value<int>(), output);
+            }
+        }
+
+        private static void AppendCellFromXY(int x, int y, List<int> output)
+        {
+            if (ResolveCellFromXY(x, y, out int cell))
+            {
+                output.Add(cell);
+            }
+        }
+
+        private static List<(int x, int y)> BuildSurroundingPointsFromDuplicants(int radius)
+        {
+            var points = new List<(int x, int y)>();
+            var duplicantCoordinates = CollectDuplicantCoordinates();
+            if (duplicantCoordinates.Count == 0)
+            {
+                return points;
+            }
+
+            int centerX = Mathf.RoundToInt(duplicantCoordinates.Average(entry => (float)entry.X));
+            int centerY = Mathf.RoundToInt(duplicantCoordinates.Average(entry => (float)entry.Y));
+
+            for (int y = centerY - radius; y <= centerY + radius; y++)
+            {
+                for (int x = centerX - radius; x <= centerX + radius; x++)
+                {
+                    points.Add((x, y));
+                }
+            }
+
+            return points;
         }
 
         private static string RequireNonEmptyString(JObject parameters, string key, string errorMessage)
@@ -2184,7 +2258,8 @@ namespace OniAiAssistant
                 ["runtime_config"] = BuildRuntimeConfigObject(),
                 ["assemblies"] = BuildAssembliesObject(),
                 ["scenes"] = BuildScenesObject(),
-                ["singletons"] = BuildSingletonSnapshot()
+                ["singletons"] = BuildSingletonSnapshot(),
+                ["world"] = BuildWorldSnapshotFromDuplicants()
             };
         }
 
@@ -2329,6 +2404,13 @@ namespace OniAiAssistant
                 throw new InvalidOperationException("HTTP request missing method");
             }
 
+            if (InvokeRuntimeMethod("HandleHttpRequest", new object[] { this, context }, out object runtimeHandled)
+                && runtimeHandled is bool handledByRuntime
+                && handledByRuntime)
+            {
+                return;
+            }
+
             if (method.Equals("GET", StringComparison.OrdinalIgnoreCase) && path.Equals("/health", StringComparison.Ordinal))
             {
                 if (!ReadLiveSpeedControlState(out int speed, out bool paused))
@@ -2462,6 +2544,43 @@ namespace OniAiAssistant
                         ["paused"] = speedControl.IsPaused,
                         ["speed"] = Mathf.Clamp(speedControl.GetSpeed(), 1, 3)
                     });
+                    return;
+                }
+            }
+
+            if (path.Equals("/camera", StringComparison.Ordinal))
+            {
+                if (method.Equals("GET", StringComparison.OrdinalIgnoreCase))
+                {
+                    JObject cameraState = BuildCameraStatePayload();
+                    if (cameraState == null)
+                    {
+                        WriteJsonResponse(context.Response, 503, new JObject { ["error"] = "camera_unavailable" });
+                        return;
+                    }
+
+                    WriteJsonResponse(context.Response, 200, cameraState);
+                    return;
+                }
+
+                if (method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    CameraRequest payload = ReadRequestBody<CameraRequest>(context.Request);
+                    if (payload == null)
+                    {
+                        WriteJsonResponse(context.Response, 400, new JObject { ["error"] = "invalid_json" });
+                        return;
+                    }
+
+                    JObject applied = ApplyCameraRequest(payload);
+                    if (applied == null)
+                    {
+                        WriteJsonResponse(context.Response, 503, new JObject { ["error"] = "camera_unavailable" });
+                        return;
+                    }
+
+                    applied["status"] = "applied";
+                    WriteJsonResponse(context.Response, 200, applied);
                     return;
                 }
             }
@@ -2672,6 +2791,125 @@ namespace OniAiAssistant
             }
 
             WriteJsonResponse(context.Response, 404, new JObject { ["error"] = "not_found" });
+        }
+
+        public JObject BuildStateResponseForApi()
+        {
+            JObject state = null;
+            try
+            {
+                int previousSpeed = 1;
+                if (ReadLiveSpeedControlState(out int liveSpeed, out bool _))
+                {
+                    previousSpeed = Mathf.Clamp(liveSpeed, 1, 3);
+                }
+
+                string requestId = "state_" + System.DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
+                state = BuildStatePayload(requestId, previousSpeed, string.Empty);
+                string apiBaseUrl = BuildApiBaseUrl();
+                if (!string.IsNullOrWhiteSpace(apiBaseUrl))
+                {
+                    state["api_base_url"] = apiBaseUrl.TrimEnd('/');
+                }
+            }
+            catch (Exception exception)
+            {
+                LogWarning("Failed to build /state snapshot error=" + exception.Message);
+                return null;
+            }
+
+            int pendingCount = 0;
+            JArray pendingFromState = state["pending_actions"] as JArray;
+            if (pendingFromState != null)
+            {
+                pendingCount = pendingFromState.Count;
+            }
+
+            return new JObject
+            {
+                ["state"] = state,
+                ["pending_action_count"] = pendingCount
+            };
+        }
+
+        public JObject BuildCameraStateForApi()
+        {
+            return BuildCameraStatePayload();
+        }
+
+        public JObject ApplyCameraRequestForApi(JObject payload)
+        {
+            if (payload == null)
+            {
+                return null;
+            }
+
+            CameraRequest request;
+            try
+            {
+                request = payload.ToObject<CameraRequest>();
+            }
+            catch
+            {
+                return null;
+            }
+
+            return request != null ? ApplyCameraRequest(request) : null;
+        }
+
+        public JObject ApplyBuildRequestForApi(JObject payload)
+        {
+            if (payload == null)
+            {
+                return null;
+            }
+
+            string message = ApplyBuildAction(payload);
+            return new JObject
+            {
+                ["status"] = "applied",
+                ["message"] = message
+            };
+        }
+
+        public JObject ApplyDigRequestForApi(JObject payload)
+        {
+            if (payload == null)
+            {
+                return null;
+            }
+
+            string message = ApplyDigAction(payload);
+            return new JObject
+            {
+                ["status"] = "applied",
+                ["message"] = message
+            };
+        }
+
+        public JObject ApplyDeconstructRequestForApi(JObject payload)
+        {
+            if (payload == null)
+            {
+                return null;
+            }
+
+            string message = ApplyDeconstructAction(payload);
+            return new JObject
+            {
+                ["status"] = "applied",
+                ["message"] = message
+            };
+        }
+
+        public static JObject ReadJsonBodyForApi(HttpListenerRequest request)
+        {
+            return ReadRequestBody<JObject>(request);
+        }
+
+        public static void WriteJsonForApi(HttpListenerResponse response, int statusCode, JObject payload)
+        {
+            WriteJsonResponse(response, statusCode, payload ?? new JObject { ["error"] = "invalid_payload" });
         }
 
         private static T ReadRequestBody<T>(HttpListenerRequest request) where T : class
@@ -3025,6 +3263,214 @@ namespace OniAiAssistant
             };
             return true;
         }
+        private static JObject BuildDuplicantPositionObject(MonoBehaviour identity)
+        {
+            int x = Mathf.RoundToInt(identity.transform.position.x);
+            int y = Mathf.RoundToInt(identity.transform.position.y);
+            int cell = -1;
+            ResolveCellFromXY(x, y, out cell);
+
+            return new JObject
+            {
+                ["x"] = x,
+                ["y"] = y,
+                ["cell"] = cell
+            };
+        }
+
+        private sealed class DuplicantCoordinate
+        {
+            public string Id { get; set; }
+            public string Name { get; set; }
+            public int X { get; set; }
+            public int Y { get; set; }
+            public int Cell { get; set; }
+        }
+
+        private static List<DuplicantCoordinate> CollectDuplicantCoordinates()
+        {
+            var result = new List<DuplicantCoordinate>();
+            MonoBehaviour[] behaviours = FindObjectsOfType<MonoBehaviour>();
+            foreach (MonoBehaviour behaviour in behaviours)
+            {
+                if (behaviour == null || behaviour.gameObject == null)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(behaviour.GetType().Name, "MinionIdentity", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                int x = Mathf.RoundToInt(behaviour.transform.position.x);
+                int y = Mathf.RoundToInt(behaviour.transform.position.y);
+                int cell = -1;
+                ResolveCellFromXY(x, y, out cell);
+
+                result.Add(new DuplicantCoordinate
+                {
+                    Id = behaviour.gameObject.GetInstanceID().ToString(CultureInfo.InvariantCulture),
+                    Name = ResolveDuplicantName(behaviour),
+                    X = x,
+                    Y = y,
+                    Cell = cell
+                });
+            }
+
+            return result;
+        }
+
+        private static JObject BuildWorldSnapshotFromDuplicants()
+        {
+            List<DuplicantCoordinate> duplicants = CollectDuplicantCoordinates();
+            var world = new JObject
+            {
+                ["duplicant_count"] = duplicants.Count
+            };
+
+            if (duplicants.Count == 0)
+            {
+                world["surrounding_area"] = new JObject();
+                return world;
+            }
+
+            int minX = duplicants.Min(entry => entry.X);
+            int maxX = duplicants.Max(entry => entry.X);
+            int minY = duplicants.Min(entry => entry.Y);
+            int maxY = duplicants.Max(entry => entry.Y);
+
+            int centerX = Mathf.RoundToInt(duplicants.Average(entry => (float)entry.X));
+            int centerY = Mathf.RoundToInt(duplicants.Average(entry => (float)entry.Y));
+
+            var sampled = new JArray();
+            foreach (DuplicantCoordinate entry in duplicants.Take(16))
+            {
+                sampled.Add(new JObject
+                {
+                    ["id"] = entry.Id,
+                    ["name"] = entry.Name,
+                    ["x"] = entry.X,
+                    ["y"] = entry.Y,
+                    ["cell"] = entry.Cell
+                });
+            }
+
+            world["center"] = new JObject
+            {
+                ["x"] = centerX,
+                ["y"] = centerY
+            };
+            world["surrounding_area"] = new JObject
+            {
+                ["x_min"] = minX,
+                ["x_max"] = maxX,
+                ["y_min"] = minY,
+                ["y_max"] = maxY,
+                ["padding"] = 6,
+                ["suggested_x_min"] = minX - 6,
+                ["suggested_x_max"] = maxX + 6,
+                ["suggested_y_min"] = minY - 6,
+                ["suggested_y_max"] = maxY + 6
+            };
+            world["duplicants"] = sampled;
+            return world;
+        }
+
+        private static Camera ResolveMainCamera()
+        {
+            if (Camera.main != null)
+            {
+                return Camera.main;
+            }
+
+            Camera[] cameras = FindObjectsOfType<Camera>();
+            foreach (Camera camera in cameras)
+            {
+                if (camera != null && camera.isActiveAndEnabled)
+                {
+                    return camera;
+                }
+            }
+
+            return cameras.FirstOrDefault();
+        }
+
+        private static JObject BuildCameraStatePayload()
+        {
+            Camera camera = ResolveMainCamera();
+            if (camera == null)
+            {
+                return null;
+            }
+
+            Vector3 position = camera.transform.position;
+            int cameraX = Mathf.RoundToInt(position.x);
+            int cameraY = Mathf.RoundToInt(position.y);
+            int cameraCell = -1;
+            ResolveCellFromXY(cameraX, cameraY, out cameraCell);
+
+            List<DuplicantCoordinate> duplicants = CollectDuplicantCoordinates();
+            JObject world = BuildWorldSnapshotFromDuplicants();
+
+            var payload = new JObject
+            {
+                ["x"] = position.x,
+                ["y"] = position.y,
+                ["z"] = position.z,
+                ["cell"] = cameraCell,
+                ["orthographic_size"] = camera.orthographicSize,
+                ["world"] = world
+            };
+
+            if (duplicants.Count > 0)
+            {
+                payload["focus_hint"] = new JObject
+                {
+                    ["x"] = Mathf.RoundToInt(duplicants.Average(entry => (float)entry.X)),
+                    ["y"] = Mathf.RoundToInt(duplicants.Average(entry => (float)entry.Y))
+                };
+            }
+
+            return payload;
+        }
+
+        private static JObject ApplyCameraRequest(CameraRequest payload)
+        {
+            Camera camera = ResolveMainCamera();
+            if (camera == null)
+            {
+                return null;
+            }
+
+            Vector3 current = camera.transform.position;
+            float nextX = current.x;
+            float nextY = current.y;
+
+            if (payload.CenterOnDuplicants == true)
+            {
+                List<DuplicantCoordinate> duplicants = CollectDuplicantCoordinates();
+                if (duplicants.Count > 0)
+                {
+                    nextX = (float)duplicants.Average(entry => entry.X);
+                    nextY = (float)duplicants.Average(entry => entry.Y);
+                }
+            }
+
+            if (payload.X.HasValue)
+            {
+                nextX = payload.X.Value;
+            }
+
+            if (payload.Y.HasValue)
+            {
+                nextY = payload.Y.Value;
+            }
+
+            camera.transform.position = new Vector3(nextX, nextY, current.z);
+            return BuildCameraStatePayload();
+        }
+
         private static bool ReadLiveSpeedControlState(out int speed, out bool paused)
         {
             speed = 1;
@@ -3050,6 +3496,18 @@ namespace OniAiAssistant
         {
             [JsonProperty("paused")]
             public bool? Paused { get; set; }
+        }
+
+        private sealed class CameraRequest
+        {
+            [JsonProperty("x")]
+            public float? X { get; set; }
+
+            [JsonProperty("y")]
+            public float? Y { get; set; }
+
+            [JsonProperty("center_on_duplicants")]
+            public bool? CenterOnDuplicants { get; set; }
         }
 
         private sealed class PriorityUpdateRequest

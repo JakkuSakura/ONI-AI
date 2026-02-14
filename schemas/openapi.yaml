@@ -160,6 +160,90 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+
+  /camera:
+    get:
+      summary: Read camera state and duplicant-based surrounding area hints
+      responses:
+        '200':
+          description: Current camera state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [x, y, z, world]
+                properties:
+                  x:
+                    type: number
+                  y:
+                    type: number
+                  z:
+                    type: number
+                  cell:
+                    type: integer
+                  orthographic_size:
+                    type: number
+                  focus_hint:
+                    $ref: '#/components/schemas/GridPoint'
+                  world:
+                    type: object
+                    additionalProperties: true
+        '503':
+          description: Camera unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: Move camera to target x/y or center on duplicants
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                x:
+                  type: number
+                y:
+                  type: number
+                center_on_duplicants:
+                  type: boolean
+      responses:
+        '200':
+          description: Camera moved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, x, y, z, world]
+                properties:
+                  status:
+                    type: string
+                    enum: [applied]
+                  x:
+                    type: number
+                  y:
+                    type: number
+                  z:
+                    type: number
+                  world:
+                    type: object
+                    additionalProperties: true
+        '400':
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Camera unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /build:
     post:
       summary: Apply build command immediately
@@ -169,17 +253,17 @@ paths:
           application/json:
             schema:
               type: object
-              required: [building_id, cells]
+              required: [building_id, points]
               additionalProperties: true
               properties:
                 building_id:
                   type: string
                   minLength: 1
-                cells:
+                points:
                   type: array
                   minItems: 1
                   items:
-                    type: integer
+                    $ref: '#/components/schemas/GridPoint'
       responses:
         '200':
           description: Build command applied
@@ -203,14 +287,14 @@ paths:
           application/json:
             schema:
               type: object
-              required: [cells]
+              required: [points]
               additionalProperties: true
               properties:
-                cells:
+                points:
                   type: array
                   minItems: 1
                   items:
-                    type: integer
+                    $ref: '#/components/schemas/GridPoint'
       responses:
         '200':
           description: Dig command applied
@@ -234,14 +318,14 @@ paths:
           application/json:
             schema:
               type: object
-              required: [cells]
+              required: [points]
               additionalProperties: true
               properties:
-                cells:
+                points:
                   type: array
                   minItems: 1
                   items:
-                    type: integer
+                    $ref: '#/components/schemas/GridPoint'
       responses:
         '200':
           description: Deconstruct command applied
@@ -337,8 +421,8 @@ paths:
                     additionalProperties: true
                   pending_action_count:
                     type: integer
-        '404':
-          description: No snapshot available yet
+        '503':
+          description: State snapshot unavailable
           content:
             application/json:
               schema:
@@ -447,6 +531,16 @@ paths:
 
 components:
   schemas:
+    GridPoint:
+      type: object
+      required: [x, y]
+      additionalProperties: false
+      properties:
+        x:
+          type: integer
+        y:
+          type: integer
+
     ErrorResponse:
       type: object
       required: [error]
