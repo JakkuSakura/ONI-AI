@@ -35,10 +35,7 @@ public sealed class OniAiController : MonoBehaviour
         private float nextUiAttachAttemptAt;
         private bool loggedButtonAttachFailure;
         private IOniAiRuntime runtimeHook;
-        private string runtimeDllPath;
-        private long runtimeDllLastWriteTicks;
-        private float nextRuntimeReloadCheckAt;
-        private bool runtimeMissingLogged;
+        private RuntimeReloadCoordinator runtimeReloadCoordinator;
         private long configLastWriteTicks;
         private float nextConfigReloadCheckAt;
         private MethodInfo chatLogMethod;
@@ -60,6 +57,7 @@ public sealed class OniAiController : MonoBehaviour
         private void Awake()
         {
             config = OniAiConfig.Load();
+            runtimeReloadCoordinator = new RuntimeReloadCoordinator();
             configLastWriteTicks = GetConfigLastWriteTicks();
             CreateNativeUiButton();
             ReloadRuntime(true);
@@ -451,77 +449,12 @@ public sealed class OniAiController : MonoBehaviour
 
         private void ReloadRuntime(bool force)
         {
-            float interval = Mathf.Clamp(config != null ? config.RuntimeReloadIntervalSeconds : 1.0f, 0.2f, 30.0f);
-            if (!force && Time.unscaledTime < nextRuntimeReloadCheckAt)
+            if (runtimeReloadCoordinator == null)
             {
-                return;
+                runtimeReloadCoordinator = new RuntimeReloadCoordinator();
             }
 
-            nextRuntimeReloadCheckAt = Time.unscaledTime + interval;
-
-            string candidatePath = ResolveRuntimeDllPath();
-            if (string.IsNullOrWhiteSpace(candidatePath) || !File.Exists(candidatePath))
-            {
-                if (!runtimeMissingLogged)
-                {
-                    Debug.LogWarning("[ONI-AI] Runtime DLL not found: " + candidatePath);
-                    runtimeMissingLogged = true;
-                }
-
-                return;
-            }
-
-            runtimeMissingLogged = false;
-
-            System.DateTime lastWriteUtc = File.GetLastWriteTimeUtc(candidatePath);
-            long lastWriteTicks = lastWriteUtc.Ticks;
-            if (!force && candidatePath == runtimeDllPath && lastWriteTicks == runtimeDllLastWriteTicks)
-            {
-                return;
-            }
-
-            try
-            {
-                byte[] bytes = File.ReadAllBytes(candidatePath);
-                var assembly = Assembly.Load(bytes);
-                Type runtimeType = assembly
-                    .GetTypes()
-                    .FirstOrDefault(type => typeof(IOniAiRuntime).IsAssignableFrom(type) && !type.IsAbstract && type.IsClass);
-
-                if (runtimeType == null)
-                {
-                    Debug.LogWarning("[ONI-AI] Runtime DLL has no IOniAiRuntime implementation: " + candidatePath);
-                    return;
-                }
-
-                var nextRuntime = (IOniAiRuntime)Activator.CreateInstance(runtimeType);
-
-                if (runtimeHook != null)
-                {
-                    try
-                    {
-                        runtimeHook.OnDetach();
-                    }
-                    catch (Exception exception)
-                    {
-                        Debug.LogWarning("[ONI-AI] Previous runtime OnDetach failed: " + exception.Message);
-                    }
-                }
-
-                runtimeHook = nextRuntime;
-                runtimeDllPath = candidatePath;
-                runtimeDllLastWriteTicks = lastWriteTicks;
-
-                runtimeHook.OnAttach(this);
-                string runtimeId = string.IsNullOrWhiteSpace(runtimeHook.RuntimeId) ? runtimeType.FullName : runtimeHook.RuntimeId;
-                Debug.Log("[ONI-AI] Runtime reloaded: " + runtimeId + " from " + runtimeDllPath);
-                PublishSuccess("ONI AI runtime reloaded");
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning("[ONI-AI] Runtime reload failed: " + exception);
-                PublishError("ONI AI runtime reload failed");
-            }
+            runtimeHook = runtimeReloadCoordinator.Reload(this, runtimeHook, config, force, GetModDirectory());
         }
 
         private void ReloadConfig(bool force)
@@ -560,22 +493,6 @@ public sealed class OniAiController : MonoBehaviour
             }
 
             return File.GetLastWriteTimeUtc(path).Ticks;
-        }
-
-        private string ResolveRuntimeDllPath()
-        {
-            string configured = config != null ? config.RuntimeDllPath : string.Empty;
-            if (string.IsNullOrWhiteSpace(configured))
-            {
-                return Path.Combine(GetModDirectory(), "runtime", "OniAiRuntime.dll");
-            }
-
-            if (Path.IsPathRooted(configured))
-            {
-                return configured;
-            }
-
-            return Path.GetFullPath(Path.Combine(GetModDirectory(), configured));
         }
 
         private void SetBusyUiState(bool busy)
@@ -2432,6 +2349,27 @@ public sealed class OniAiController : MonoBehaviour
             if (method == null)
             {
                 throw new InvalidOperationException("HTTP request missing method");
+            }
+
+            if (path.Equals("/reload", StringComparison.Ordinal))
+            {
+                if (!string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteJsonResponse(context.Response, 405, new JObject { ["error"] = "method_not_allowed" });
+                    return;
+                }
+
+                string before = runtimeHook != null ? runtimeHook.RuntimeId : string.Empty;
+                ReloadRuntime(true);
+                string after = runtimeHook != null ? runtimeHook.RuntimeId : string.Empty;
+                WriteJsonResponse(context.Response, 200, new JObject
+                {
+                    ["status"] = "reloaded",
+                    ["runtime_id_before"] = before,
+                    ["runtime_id_after"] = after,
+                    ["runtime_loaded"] = runtimeHook != null
+                });
+                return;
             }
 
             if (InvokeRuntimeMethod("HandleHttpRequest", new object[] { this, context }, out object runtimeHandled)
