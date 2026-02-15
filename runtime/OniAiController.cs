@@ -1931,13 +1931,75 @@ public sealed class OniAiController : MonoBehaviour
 
         private static Type FindRuntimeType(string typeName)
         {
+            if (string.IsNullOrWhiteSpace(typeName))
+            {
+                return null;
+            }
+
+            var exactCandidates = new List<Type>();
+            var nameOnlyCandidates = new List<Type>();
+
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                Type match = assembly.GetTypes().FirstOrDefault(type => string.Equals(type.Name, typeName, StringComparison.Ordinal));
-                if (match != null)
+                Type[] types;
+                try
                 {
-                    return match;
+                    types = assembly.GetTypes();
                 }
+                catch (ReflectionTypeLoadException exception)
+                {
+                    types = exception.Types;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (types == null)
+                {
+                    continue;
+                }
+
+                foreach (Type type in types)
+                {
+                    if (type == null)
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(type.FullName, typeName, StringComparison.Ordinal))
+                    {
+                        exactCandidates.Add(type);
+                        continue;
+                    }
+
+                    if (string.Equals(type.Name, typeName, StringComparison.Ordinal))
+                    {
+                        nameOnlyCandidates.Add(type);
+                    }
+                }
+            }
+
+            Type preferredExact = exactCandidates.FirstOrDefault(type => string.Equals(type.Assembly.GetName().Name, "Assembly-CSharp", StringComparison.Ordinal));
+            if (preferredExact != null)
+            {
+                return preferredExact;
+            }
+
+            if (exactCandidates.Count > 0)
+            {
+                return exactCandidates[0];
+            }
+
+            Type preferredNameOnly = nameOnlyCandidates.FirstOrDefault(type => string.Equals(type.Assembly.GetName().Name, "Assembly-CSharp", StringComparison.Ordinal));
+            if (preferredNameOnly != null)
+            {
+                return preferredNameOnly;
+            }
+
+            if (nameOnlyCandidates.Count > 0)
+            {
+                return nameOnlyCandidates[0];
             }
 
             return null;
@@ -2398,329 +2460,11 @@ public sealed class OniAiController : MonoBehaviour
             WriteJsonResponse(context.Response, 404, new JObject { ["error"] = "not_found" });
         }
 
-        public JObject BuildHealthResponseForApi()
-        {
-            if (!ReadLiveSpeedControlState(out int speed, out bool paused))
-            {
-                return null;
-            }
-
-            return new JObject
-            {
-                ["ok"] = true,
-                ["busy"] = isBusy,
-                ["current_speed"] = speed,
-                ["paused"] = paused
-            };
-        }
-
-        public JObject BuildSpeedResponseForApi()
-        {
-            if (!ReadLiveSpeedControlState(out int speed, out bool paused))
-            {
-                return null;
-            }
-
-            return new JObject
-            {
-                ["speed"] = speed,
-                ["paused"] = paused
-            };
-        }
-
-        public JObject ApplySpeedForApi(int speed)
-        {
-            var speedControl = SpeedControlScreen.Instance;
-            if (speedControl == null)
-            {
-                return null;
-            }
-
-            speedControl.SetSpeed(Mathf.Clamp(speed, 1, 3));
-            return new JObject
-            {
-                ["status"] = "applied",
-                ["speed"] = Mathf.Clamp(speedControl.GetSpeed(), 1, 3),
-                ["paused"] = speedControl.IsPaused
-            };
-        }
-
-        public JObject BuildPauseResponseForApi()
-        {
-            if (!ReadLiveSpeedControlState(out int speed, out bool paused))
-            {
-                return null;
-            }
-
-            return new JObject
-            {
-                ["paused"] = paused,
-                ["speed"] = speed
-            };
-        }
-
-        public JObject ApplyPauseForApi(bool paused)
-        {
-            var speedControl = SpeedControlScreen.Instance;
-            if (speedControl == null)
-            {
-                return null;
-            }
-
-            if (paused)
-            {
-                PauseGame(speedControl);
-            }
-            else
-            {
-                ResumeGame(speedControl, Mathf.Clamp(speedControl.GetSpeed(), 1, 3));
-            }
-
-            return new JObject
-            {
-                ["status"] = "applied",
-                ["paused"] = speedControl.IsPaused,
-                ["speed"] = Mathf.Clamp(speedControl.GetSpeed(), 1, 3)
-            };
-        }
-
-        public JObject BuildBuildingsResponseForApi()
-        {
-            return BuildBuildingCatalog(out JObject catalog) ? catalog : null;
-        }
-
-        public JObject BuildResearchResponseForApi()
-        {
-            return BuildResearchCatalog(out JObject catalog) ? catalog : null;
-        }
-
-        public JObject ApplyResearchRequestForApi(JObject payload)
-        {
-            if (payload == null)
-            {
-                return null;
-            }
-
-            string message = ApplyResearchAction(payload);
-            return new JObject
-            {
-                ["status"] = "applied",
-                ["message"] = message
-            };
-        }
-
-        public JObject BuildPrioritiesResponseForApi()
-        {
-            return new JObject
-            {
-                ["priorities"] = BuildPrioritiesSnapshot(),
-                ["source"] = "game_live"
-            };
-        }
-
-        public JObject ApplyPrioritiesRequestForApi(JObject payload)
-        {
-            if (payload == null)
-            {
-                return null;
-            }
-
-            JArray updates = payload["priorities"] as JArray;
-            if (updates == null)
-            {
-                throw new InvalidOperationException("priorities_must_be_array");
-            }
-
-            int accepted = 0;
-            foreach (JToken token in updates)
-            {
-                if (!(token is JObject update))
-                {
-                    continue;
-                }
-
-                JObject values = update["values"] as JObject;
-                if (values == null || values.Count == 0)
-                {
-                    continue;
-                }
-
-                var parameters = new JObject
-                {
-                    ["priorities"] = values.DeepClone()
-                };
-
-                if (update["duplicant_id"] != null && update["duplicant_id"].Type == JTokenType.String)
-                {
-                    string duplicantId = update["duplicant_id"].Value<string>()?.Trim();
-                    if (!string.IsNullOrEmpty(duplicantId))
-                    {
-                        parameters["duplicant_id"] = duplicantId;
-                    }
-                }
-
-                ApplyDuplicantPriorityUpdate(parameters);
-                accepted++;
-            }
-
-            return new JObject
-            {
-                ["accepted"] = accepted,
-                ["status"] = "applied"
-            };
-        }
-
-        public JObject BuildStateResponseForApi()
-        {
-            JObject state = null;
-            try
-            {
-                int previousSpeed = 1;
-                if (ReadLiveSpeedControlState(out int liveSpeed, out bool _))
-                {
-                    previousSpeed = Mathf.Clamp(liveSpeed, 1, 3);
-                }
-
-                string requestId = "state_" + System.DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
-                state = BuildStatePayload(requestId, previousSpeed, string.Empty);
-                string apiBaseUrl = BuildApiBaseUrl();
-                if (!string.IsNullOrWhiteSpace(apiBaseUrl))
-                {
-                    state["api_base_url"] = apiBaseUrl.TrimEnd('/');
-                }
-            }
-            catch (Exception exception)
-            {
-                LogWarning("Failed to build /state snapshot error=" + exception.Message);
-                return null;
-            }
-
-            int pendingCount = 0;
-            JArray pendingFromState = state["pending_actions"] as JArray;
-            if (pendingFromState != null)
-            {
-                pendingCount = pendingFromState.Count;
-            }
-
-            return new JObject
-            {
-                ["state"] = state,
-                ["pending_action_count"] = pendingCount
-            };
-        }
-
-        public JObject BuildCameraStateForApi()
-        {
-            return BuildCameraStatePayload();
-        }
-
-        public JObject ApplyCameraRequestForApi(JObject payload)
-        {
-            if (payload == null)
-            {
-                return null;
-            }
-
-            CameraRequest request;
-            try
-            {
-                request = payload.ToObject<CameraRequest>();
-            }
-            catch
-            {
-                return null;
-            }
-
-            return request != null ? ApplyCameraRequest(request) : null;
-        }
-
-        public JObject ApplyBuildRequestForApi(JObject payload)
-        {
-            if (payload == null)
-            {
-                return null;
-            }
-
-            string message = ApplyBuildAction(payload);
-            return new JObject
-            {
-                ["status"] = "applied",
-                ["message"] = message
-            };
-        }
-
-        public JObject ApplyDigRequestForApi(JObject payload)
-        {
-            if (payload == null)
-            {
-                return null;
-            }
-
-            string message = ApplyDigAction(payload);
-            return new JObject
-            {
-                ["status"] = "applied",
-                ["message"] = message
-            };
-        }
-
-        public JObject ApplyDeconstructRequestForApi(JObject payload)
-        {
-            if (payload == null)
-            {
-                return null;
-            }
-
-            string message = ApplyDeconstructAction(payload);
-            return new JObject
-            {
-                ["status"] = "applied",
-                ["message"] = message
-            };
-        }
-
-        public static JObject ReadJsonBodyForApi(HttpListenerRequest request)
-        {
-            return ReadRequestBody<JObject>(request);
-        }
-
-        public static void WriteJsonForApi(HttpListenerResponse response, int statusCode, JObject payload)
-        {
-            WriteJsonResponse(response, statusCode, payload ?? new JObject { ["error"] = "invalid_payload" });
-        }
-
-        private static T ReadRequestBody<T>(HttpListenerRequest request) where T : class
-        {
-            try
-            {
-                Encoding encoding = request.ContentEncoding;
-                if (encoding == null)
-                {
-                    throw new InvalidOperationException("HTTP request missing ContentEncoding");
-                }
-
-                using (var reader = new StreamReader(request.InputStream, encoding))
-                {
-                    string body = reader.ReadToEnd();
-                    if (string.IsNullOrWhiteSpace(body))
-                    {
-                        return null;
-                    }
-
-                    return JsonConvert.DeserializeObject<T>(body);
-                }
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
         private static void WriteJsonResponse(HttpListenerResponse response, int statusCode, JObject payload)
         {
             try
             {
-                byte[] bytes = Encoding.UTF8.GetBytes(payload.ToString(Newtonsoft.Json.Formatting.None));
+                byte[] bytes = Encoding.UTF8.GetBytes((payload ?? new JObject { ["error"] = "invalid_payload" }).ToString(Newtonsoft.Json.Formatting.None));
                 response.StatusCode = statusCode;
                 response.ContentType = "application/json; charset=utf-8";
                 response.ContentLength64 = bytes.Length;
@@ -2741,6 +2485,26 @@ public sealed class OniAiController : MonoBehaviour
                 {
                 }
             }
+        }
+
+        public JObject ApplyCameraRequestForApi(JObject payload)
+        {
+            if (payload == null)
+            {
+                return null;
+            }
+
+            CameraRequest request;
+            try
+            {
+                request = payload.ToObject<CameraRequest>();
+            }
+            catch
+            {
+                return null;
+            }
+
+            return request != null ? ApplyCameraRequest(request) : null;
         }
 
         private static bool BuildBuildingCatalog(out JObject catalog)

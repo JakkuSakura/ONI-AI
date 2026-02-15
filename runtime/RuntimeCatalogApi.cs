@@ -1,3 +1,4 @@
+using System;
 using Newtonsoft.Json.Linq;
 using OniAiAssistant;
 
@@ -5,42 +6,44 @@ namespace OniAiAssistantRuntime
 {
     internal sealed class RuntimeCatalogApi
     {
+        private readonly RuntimeApiBackend backend = new RuntimeApiBackend();
+
         public bool Handle(OniAiController controller, System.Net.HttpListenerContext context, string method, string path)
         {
-            if (string.Equals(path, "/buildings", System.StringComparison.Ordinal)
-                && string.Equals(method, "GET", System.StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(path, "/buildings", StringComparison.Ordinal)
+                && string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
             {
-                JObject payload = controller.BuildBuildingsResponseForApi();
-                OniAiController.WriteJsonForApi(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "building_catalog_unavailable" });
+                JObject payload = backend.BuildBuildings();
+                RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "building_catalog_unavailable" });
                 return true;
             }
 
-            if (string.Equals(path, "/research", System.StringComparison.Ordinal))
+            if (string.Equals(path, "/research", StringComparison.Ordinal))
             {
-                if (string.Equals(method, "GET", System.StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
                 {
-                    JObject payload = controller.BuildResearchResponseForApi();
-                    OniAiController.WriteJsonForApi(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "research_catalog_unavailable" });
+                    JObject payload = backend.BuildResearch();
+                    RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "research_catalog_unavailable" });
                     return true;
                 }
 
-                if (string.Equals(method, "POST", System.StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
                 {
-                    JObject body = OniAiController.ReadJsonBodyForApi(context.Request);
+                    JObject body = RuntimeJson.ReadJsonBody(context.Request);
                     if (body == null)
                     {
-                        OniAiController.WriteJsonForApi(context.Response, 400, RuntimeApiRouter.InvalidJson());
+                        RuntimeJson.WriteJson(context.Response, 400, RuntimeApiRouter.InvalidJson());
                         return true;
                     }
 
                     try
                     {
-                        JObject payload = controller.ApplyResearchRequestForApi(body);
-                        OniAiController.WriteJsonForApi(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "research_catalog_unavailable" });
+                        JObject payload = backend.ApplyResearch(controller, body);
+                        RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "research_catalog_unavailable" });
                     }
-                    catch (System.Exception exception)
+                    catch (Exception exception)
                     {
-                        OniAiController.WriteJsonForApi(context.Response, 400, new JObject { ["error"] = exception.Message });
+                        RuntimeJson.WriteJson(context.Response, 400, new JObject { ["error"] = exception.Message });
                     }
 
                     return true;

@@ -1,3 +1,4 @@
+using System;
 using System.Net;
 using Newtonsoft.Json.Linq;
 using OniAiAssistant;
@@ -6,42 +7,44 @@ namespace OniAiAssistantRuntime
 {
     internal sealed class RuntimeActionApi
     {
+        private readonly RuntimeApiBackend backend = new RuntimeApiBackend();
+
         public bool Handle(OniAiController controller, HttpListenerContext context, string method, string path)
         {
-            if (!string.Equals(method, "POST", System.StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
 
-            if (!string.Equals(path, "/build", System.StringComparison.Ordinal)
-                && !string.Equals(path, "/dig", System.StringComparison.Ordinal)
-                && !string.Equals(path, "/deconstruct", System.StringComparison.Ordinal))
+            if (!string.Equals(path, "/build", StringComparison.Ordinal)
+                && !string.Equals(path, "/dig", StringComparison.Ordinal)
+                && !string.Equals(path, "/deconstruct", StringComparison.Ordinal))
             {
                 return false;
             }
 
-            JObject body = OniAiController.ReadJsonBodyForApi(context.Request);
+            JObject body = RuntimeJson.ReadJsonBody(context.Request);
             if (body == null)
             {
-                OniAiController.WriteJsonForApi(context.Response, 400, RuntimeApiRouter.InvalidJson());
+                RuntimeJson.WriteJson(context.Response, 400, RuntimeApiRouter.InvalidJson());
                 return true;
             }
 
             JObject payload;
-            if (string.Equals(path, "/build", System.StringComparison.Ordinal))
+            if (string.Equals(path, "/build", StringComparison.Ordinal))
             {
-                payload = controller.ApplyBuildRequestForApi(body);
+                payload = backend.ApplyBuild(controller, body);
             }
-            else if (string.Equals(path, "/dig", System.StringComparison.Ordinal))
+            else if (string.Equals(path, "/dig", StringComparison.Ordinal))
             {
-                payload = controller.ApplyDigRequestForApi(body);
+                payload = backend.ApplyDig(controller, body);
             }
             else
             {
-                payload = controller.ApplyDeconstructRequestForApi(body);
+                payload = backend.ApplyDeconstruct(controller, body);
             }
 
-            OniAiController.WriteJsonForApi(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "action_unavailable" });
+            RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "action_unavailable" });
             return true;
         }
     }

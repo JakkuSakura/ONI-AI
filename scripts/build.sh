@@ -31,7 +31,17 @@ CSC_BIN="${CSC_BIN:-csc}"
   -r:"$MANAGED_DIR/UnityEngine.IMGUIModule.dll" \
   -r:"$MANAGED_DIR/UnityEngine.ScreenCaptureModule.dll" \
   -r:"$MANAGED_DIR/UnityEngine.UnityWebRequestModule.dll" \
-  "$MOD_DIR"/*.cs
+  "$MOD_DIR"/*.cs \
+  "$RUNTIME_DIR"/OniAiController.cs
+
+runtime_sources=()
+for source in "$RUNTIME_DIR"/*.cs; do
+  if [ "$(basename "$source")" = "OniAiController.cs" ]; then
+    continue
+  fi
+
+  runtime_sources+=("$source")
+done
 
 "$CSC_BIN" \
   -nologo \
@@ -41,7 +51,7 @@ CSC_BIN="${CSC_BIN:-csc}"
   -r:"$MANAGED_DIR/netstandard.dll" \
   -r:"$MANAGED_DIR/Newtonsoft.Json.dll" \
   -r:"$MANAGED_DIR/UnityEngine.CoreModule.dll" \
-  "$RUNTIME_DIR"/*.cs
+  "${runtime_sources[@]}"
 
 echo "Build output: $OUT_DIR/OniAiAssistant.dll"
 echo "Build output: $OUT_DIR/OniAiRuntime.dll"
