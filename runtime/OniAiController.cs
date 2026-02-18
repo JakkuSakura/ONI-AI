@@ -1751,6 +1751,7 @@ public sealed class OniAiController : MonoBehaviour
             var signal = new ManualResetEvent(false);
             T result = default;
             Exception captured = null;
+            int completionState = 0;
 
             lock (mainThreadDispatchSync)
             {
@@ -1766,18 +1767,39 @@ public sealed class OniAiController : MonoBehaviour
                     }
                     finally
                     {
-                        signal.Set();
+                        int previous = Interlocked.CompareExchange(ref completionState, 1, 0);
+                        if (previous == 0)
+                        {
+                            try
+                            {
+                                signal.Set();
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                            }
+                        }
+                        else if (previous == 2)
+                        {
+                            signal.Dispose();
+                        }
                     }
                 });
             }
 
             bool completed = signal.WaitOne(3000);
-            signal.Dispose();
 
             if (!completed)
             {
+                int previous = Interlocked.CompareExchange(ref completionState, 2, 0);
+                if (previous == 1)
+                {
+                    signal.Dispose();
+                }
+
                 throw new InvalidOperationException("main_thread_dispatch_timeout");
             }
+
+            signal.Dispose();
 
             if (captured != null)
             {
@@ -2797,7 +2819,6 @@ public sealed class OniAiController : MonoBehaviour
                 || path.Equals("/buildings", StringComparison.Ordinal)
                 || path.Equals("/priorities", StringComparison.Ordinal)
                 || path.Equals("/actions/pending", StringComparison.Ordinal)
-                || path.Equals("/actions/recent", StringComparison.Ordinal)
                 || path.Equals("/cells", StringComparison.Ordinal))
             {
                 WriteJsonResponse(context.Response, 503, new JObject { ["error"] = "runtime_unavailable" });

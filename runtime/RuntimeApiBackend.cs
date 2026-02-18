@@ -13,9 +13,6 @@ namespace OniAiAssistantRuntime
     {
         private static readonly DateTime runtimeStartedAtUtc = DateTime.UtcNow;
         private static bool speedThreeMappedToRuntimeTwo;
-        private static readonly object proofSync = new object();
-        private static readonly LinkedList<JObject> recentActionProofs = new LinkedList<JObject>();
-        private const int MaxActionProofs = 256;
 
         public JObject BuildRuntimeInfo()
         {
@@ -90,7 +87,6 @@ namespace OniAiAssistantRuntime
 
             if (directPayload != null)
             {
-                RecordActionProof("set_speed", new JObject { ["speed"] = requested }, directPayload, null);
                 return directPayload;
             }
 
@@ -135,7 +131,6 @@ namespace OniAiAssistantRuntime
                 ["mapped_compatibility_mode"] = mapped
             };
 
-            RecordActionProof("set_speed", new JObject { ["speed"] = requested }, result, status == "applied" ? null : "speed_rejected");
             return result;
         }
 
@@ -180,7 +175,6 @@ namespace OniAiAssistantRuntime
                 ["speed"] = NormalizeApiSpeedForCompatibility(Mathf.Clamp(ReadIntByName(speedControl, "GetSpeed", 1), 1, 3))
             };
 
-            RecordActionProof("set_pause", new JObject { ["paused"] = paused }, result, null);
             return result;
         }
 
@@ -228,7 +222,6 @@ namespace OniAiAssistantRuntime
                 ["message"] = message
             };
 
-            RecordActionProof("set_research", payload, result, null);
             return result;
         }
 
@@ -360,7 +353,6 @@ namespace OniAiAssistantRuntime
                 ["results"] = results
             };
 
-            RecordActionProof("set_priorities", payload, resultPayload, failed > 0 ? "priority_update_partial_or_failed" : null);
             return resultPayload;
         }
 
@@ -399,29 +391,6 @@ namespace OniAiAssistantRuntime
                     ["with_chore_queue"] = withQueues
                 },
                 ["pending_actions"] = pending
-            };
-        }
-
-        public JObject BuildActionProofs(int limit)
-        {
-            int bounded = Mathf.Clamp(limit, 1, 200);
-            var items = new JArray();
-
-            lock (proofSync)
-            {
-                LinkedListNode<JObject> node = recentActionProofs.Last;
-                while (node != null && items.Count < bounded)
-                {
-                    items.Add(node.Value.DeepClone());
-                    node = node.Previous;
-                }
-            }
-
-            return new JObject
-            {
-                ["source"] = "runtime_receipts",
-                ["count"] = items.Count,
-                ["items"] = items
             };
         }
 
@@ -572,7 +541,6 @@ namespace OniAiAssistantRuntime
                 ["message"] = message
             };
 
-            RecordActionProof("build", payload, result, null);
             return result;
         }
 
@@ -590,7 +558,6 @@ namespace OniAiAssistantRuntime
                 ["message"] = message
             };
 
-            RecordActionProof("dig", payload, result, null);
             return result;
         }
 
@@ -608,34 +575,7 @@ namespace OniAiAssistantRuntime
                 ["message"] = message
             };
 
-            RecordActionProof("deconstruct", payload, result, null);
             return result;
-        }
-
-        private static void RecordActionProof(string actionType, JObject request, JObject response, string error)
-        {
-            var item = new JObject
-            {
-                ["action_type"] = actionType ?? string.Empty,
-                ["observed_at_utc"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
-                ["request"] = request != null ? request.DeepClone() : new JObject(),
-                ["response"] = response != null ? response.DeepClone() : new JObject(),
-                ["status"] = string.IsNullOrWhiteSpace(error) ? "ok" : "failed"
-            };
-
-            if (!string.IsNullOrWhiteSpace(error))
-            {
-                item["error"] = error;
-            }
-
-            lock (proofSync)
-            {
-                recentActionProofs.AddLast(item);
-                while (recentActionProofs.Count > MaxActionProofs)
-                {
-                    recentActionProofs.RemoveFirst();
-                }
-            }
         }
 
         private static bool TryGetSpeedControl(out object speedControl)
