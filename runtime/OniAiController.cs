@@ -41,6 +41,9 @@ public sealed class OniAiController : MonoBehaviour
         private MethodInfo chatLogMethod;
         private object chatLogTarget;
         private bool chatLogProbeAttempted;
+        private int unityMainThreadId;
+        private readonly object mainThreadDispatchSync = new object();
+        private readonly Queue<System.Action> mainThreadDispatchQueue = new Queue<System.Action>();
 
         public static void EnsureInstance()
         {
@@ -56,6 +59,7 @@ public sealed class OniAiController : MonoBehaviour
 
         private void Awake()
         {
+            unityMainThreadId = Thread.CurrentThread.ManagedThreadId;
             config = OniAiConfig.Load();
             runtimeReloadCoordinator = new RuntimeReloadCoordinator();
             configLastWriteTicks = GetConfigLastWriteTicks();
@@ -67,6 +71,8 @@ public sealed class OniAiController : MonoBehaviour
 
         private void Update()
         {
+            DrainMainThreadDispatchQueue();
+
             if (buttonRoot == null && Time.unscaledTime >= nextUiAttachAttemptAt)
             {
                 CreateNativeUiButton();
@@ -1542,6 +1548,11 @@ public sealed class OniAiController : MonoBehaviour
 
         private string ApplyDigAction(JObject parameters)
         {
+            if (!IsOnUnityMainThread())
+            {
+                return ExecuteOnUnityMainThread(() => ApplyDigAction(parameters));
+            }
+
             List<int> cells = ResolveCellsFromParameters(parameters);
             if (cells.Count == 0)
             {
@@ -1556,6 +1567,11 @@ public sealed class OniAiController : MonoBehaviour
             int applied = 0;
             foreach (int cell in cells)
             {
+                if (!CanToolMarkCell(digTool, cell, "IsValidCell", "ValidCell", "CanDigCell", "CanDig"))
+                {
+                    continue;
+                }
+
                 bool ok = InvokeMethodByName(digTool, "OnDragTool", new object[] { cell, 0 });
                 if (!ok)
                 {
@@ -1588,6 +1604,11 @@ public sealed class OniAiController : MonoBehaviour
 
         private string ApplyDeconstructAction(JObject parameters)
         {
+            if (!IsOnUnityMainThread())
+            {
+                return ExecuteOnUnityMainThread(() => ApplyDeconstructAction(parameters));
+            }
+
             List<int> cells = ResolveCellsFromParameters(parameters);
             if (cells.Count == 0)
             {
@@ -1602,6 +1623,11 @@ public sealed class OniAiController : MonoBehaviour
             int applied = 0;
             foreach (int cell in cells)
             {
+                if (!CanToolMarkCell(deconstructTool, cell, "IsValidCell", "ValidCell", "CanDeconstructCell", "CanDeconstruct"))
+                {
+                    continue;
+                }
+
                 if (InvokeMethodByName(deconstructTool, "DeconstructCell", new object[] { cell })
                     || InvokeMethodByName(deconstructTool, "OnDragTool", new object[] { cell, 0 }))
                 {
@@ -1619,69 +1645,173 @@ public sealed class OniAiController : MonoBehaviour
 
         private string ApplyBuildAction(JObject parameters)
         {
-            string buildingId = RequireNonEmptyString(parameters, "building_id", "build requires non-empty building_id");
-
-            List<int> cells = ResolveCellsFromParameters(parameters);
-            if (cells.Count == 0)
+            if (!IsOnUnityMainThread())
             {
-                throw new InvalidOperationException("build requires explicit params.points or params.x/params.y");
+                return ExecuteOnUnityMainThread(() => ApplyBuildAction(parameters));
             }
 
-            if (!ResolveBuildingDef(buildingId, out object buildingDef))
+            try
             {
-                throw new InvalidOperationException("Building definition not found for id=" + buildingId);
-            }
+                string buildingId = RequireNonEmptyString(parameters, "building_id", "build requires non-empty building_id");
 
-            if (!GetRuntimeToolInstance("BuildTool", out object buildTool))
-            {
-                throw new InvalidOperationException("BuildTool instance unavailable");
-            }
-
-            object selectedElements = null;
-            MethodInfo defaultElementsMethod = buildingDef.GetType().GetMethod("DefaultElements", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
-            if (defaultElementsMethod != null)
-            {
-                try
+                List<int> cells = ResolveCellsFromParameters(parameters);
+                if (cells.Count == 0)
                 {
-                    selectedElements = defaultElementsMethod.Invoke(buildingDef, null);
+                    throw new InvalidOperationException("build requires explicit params.points or params.x/params.y");
                 }
-                catch
+
+                if (!ResolveBuildingDef(buildingId, out object buildingDef) || buildingDef == null)
                 {
+                    throw new InvalidOperationException("Building definition not found for id=" + buildingId);
                 }
-            }
 
-            if (selectedElements == null)
-            {
-                throw new InvalidOperationException("Building definition could not provide default construction elements for id=" + buildingId);
-            }
-
-            bool selected = InvokeMethodByName(buildTool, "Activate", new[] { buildingDef, selectedElements })
-                || InvokeMethodByName(buildTool, "SetSelectedBuildingDef", new[] { buildingDef })
-                || InvokeMethodByName(buildTool, "SetToolParameter", new[] { buildingDef })
-                || InvokeMethodByName(buildTool, "SetBuildingDef", new[] { buildingDef })
-                || InvokeMethodByName(buildTool, "SetDef", new[] { buildingDef });
-
-            if (!selected)
-            {
-                throw new InvalidOperationException("BuildTool could not accept selected building def for id=" + buildingId);
-            }
-
-            int applied = 0;
-            foreach (int cell in cells)
-            {
-                if (InvokeMethodByName(buildTool, "TryBuild", new object[] { cell })
-                    || InvokeMethodByName(buildTool, "OnDragTool", new object[] { cell, 0 }))
+                if (!GetRuntimeToolInstance("BuildTool", out object buildTool) || buildTool == null)
                 {
-                    applied++;
+                    throw new InvalidOperationException("BuildTool instance unavailable");
                 }
-            }
 
-            if (applied <= 0)
+                object selectedElements = null;
+                MethodInfo defaultElementsMethod = buildingDef.GetType().GetMethod("DefaultElements", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
+                if (defaultElementsMethod != null)
+                {
+                    try
+                    {
+                        selectedElements = defaultElementsMethod.Invoke(buildingDef, null);
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (selectedElements == null)
+                {
+                    throw new InvalidOperationException("Building definition could not provide default construction elements for id=" + buildingId);
+                }
+
+                bool selected = InvokeMethodByName(buildTool, "Activate", new[] { buildingDef, selectedElements })
+                    || InvokeMethodByName(buildTool, "SetSelectedBuildingDef", new[] { buildingDef })
+                    || InvokeMethodByName(buildTool, "SetToolParameter", new[] { buildingDef })
+                    || InvokeMethodByName(buildTool, "SetBuildingDef", new[] { buildingDef })
+                    || InvokeMethodByName(buildTool, "SetDef", new[] { buildingDef });
+
+                if (!selected)
+                {
+                    throw new InvalidOperationException("BuildTool could not accept selected building def for id=" + buildingId);
+                }
+
+                int applied = 0;
+                foreach (int cell in cells)
+                {
+                    if (InvokeMethodByName(buildTool, "TryBuild", new object[] { cell })
+                        || InvokeMethodByName(buildTool, "OnDragTool", new object[] { cell, 0 }))
+                    {
+                        applied++;
+                    }
+                }
+
+                if (applied <= 0)
+                {
+                    throw new InvalidOperationException("BuildTool did not accept placement cells for id=" + buildingId);
+                }
+
+                return "Applied build id=" + buildingId + " to " + applied.ToString(CultureInfo.InvariantCulture) + " cells";
+            }
+            catch (InvalidOperationException)
             {
-                throw new InvalidOperationException("BuildTool did not accept placement cells for id=" + buildingId);
+                throw;
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException("build_failed_runtime_exception: " + exception.GetType().Name + ": " + exception.Message);
+            }
+        }
+
+        private bool IsOnUnityMainThread()
+        {
+            return Thread.CurrentThread.ManagedThreadId == unityMainThreadId;
+        }
+
+        public T ExecuteHttpOperationOnMainThread<T>(Func<T> action)
+        {
+            return ExecuteOnUnityMainThread(action);
+        }
+
+        private T ExecuteOnUnityMainThread<T>(Func<T> action)
+        {
+            if (action == null)
+            {
+                throw new InvalidOperationException("main_thread_action_missing");
             }
 
-            return "Applied build id=" + buildingId + " to " + applied.ToString(CultureInfo.InvariantCulture) + " cells";
+            if (IsOnUnityMainThread())
+            {
+                return action();
+            }
+
+            var signal = new ManualResetEvent(false);
+            T result = default;
+            Exception captured = null;
+
+            lock (mainThreadDispatchSync)
+            {
+                mainThreadDispatchQueue.Enqueue(() =>
+                {
+                    try
+                    {
+                        result = action();
+                    }
+                    catch (Exception exception)
+                    {
+                        captured = exception;
+                    }
+                    finally
+                    {
+                        signal.Set();
+                    }
+                });
+            }
+
+            bool completed = signal.WaitOne(3000);
+            signal.Dispose();
+
+            if (!completed)
+            {
+                throw new InvalidOperationException("main_thread_dispatch_timeout");
+            }
+
+            if (captured != null)
+            {
+                throw captured;
+            }
+
+            return result;
+        }
+
+        private void DrainMainThreadDispatchQueue()
+        {
+            if (!IsOnUnityMainThread())
+            {
+                return;
+            }
+
+            for (int index = 0; index < 16; index++)
+            {
+                System.Action pending = null;
+                lock (mainThreadDispatchSync)
+                {
+                    if (mainThreadDispatchQueue.Count > 0)
+                    {
+                        pending = mainThreadDispatchQueue.Dequeue();
+                    }
+                }
+
+                if (pending == null)
+                {
+                    return;
+                }
+
+                pending();
+            }
         }
 
         private string ApplyPriorityAction(JObject parameters)
@@ -1744,6 +1874,52 @@ public sealed class OniAiController : MonoBehaviour
             }
 
             return applied;
+        }
+
+        private static bool CanToolMarkCell(object toolInstance, int cell, params string[] validatorMethodNames)
+        {
+            if (toolInstance == null)
+            {
+                return false;
+            }
+
+            if (validatorMethodNames == null || validatorMethodNames.Length == 0)
+            {
+                return true;
+            }
+
+            Type type = toolInstance.GetType();
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            bool foundValidator = false;
+
+            foreach (string methodName in validatorMethodNames)
+            {
+                if (string.IsNullOrWhiteSpace(methodName))
+                {
+                    continue;
+                }
+
+                MethodInfo method = type.GetMethod(methodName, flags, null, new[] { typeof(int) }, null);
+                if (method == null)
+                {
+                    continue;
+                }
+
+                foundValidator = true;
+                try
+                {
+                    object value = method.Invoke(toolInstance, new object[] { cell });
+                    if (value is bool accepted)
+                    {
+                        return accepted;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return !foundValidator;
         }
 
         private static List<int> ResolveCellsFromParameters(JObject parameters)
@@ -2609,6 +2785,7 @@ public sealed class OniAiController : MonoBehaviour
             }
 
             if (path.Equals("/health", StringComparison.Ordinal)
+                || path.Equals("/runtime", StringComparison.Ordinal)
                 || path.Equals("/speed", StringComparison.Ordinal)
                 || path.Equals("/pause", StringComparison.Ordinal)
                 || path.Equals("/camera", StringComparison.Ordinal)
@@ -2618,7 +2795,10 @@ public sealed class OniAiController : MonoBehaviour
                 || path.Equals("/research", StringComparison.Ordinal)
                 || path.Equals("/state", StringComparison.Ordinal)
                 || path.Equals("/buildings", StringComparison.Ordinal)
-                || path.Equals("/priorities", StringComparison.Ordinal))
+                || path.Equals("/priorities", StringComparison.Ordinal)
+                || path.Equals("/actions/pending", StringComparison.Ordinal)
+                || path.Equals("/actions/recent", StringComparison.Ordinal)
+                || path.Equals("/cells", StringComparison.Ordinal))
             {
                 WriteJsonResponse(context.Response, 503, new JObject { ["error"] = "runtime_unavailable" });
                 return;
@@ -3027,6 +3207,328 @@ public sealed class OniAiController : MonoBehaviour
             }
 
             return result;
+        }
+
+        private sealed class GridPointCoordinate
+        {
+            public int X { get; set; }
+            public int Y { get; set; }
+        }
+
+        private static JObject BuildCellProofPayload(JObject payload)
+        {
+            List<GridPointCoordinate> points = ParseGridPoints(payload);
+            if (points.Count == 0)
+            {
+                throw new InvalidOperationException("proof_cells_requires_points");
+            }
+
+            Type gridType = FindRuntimeType("Grid");
+            var cells = new JArray();
+            int validCells = 0;
+
+            foreach (GridPointCoordinate point in points)
+            {
+                int cell = -1;
+                ResolveCellFromXY(point.X, point.Y, out cell);
+                bool valid = gridType != null && TryIsValidGridCell(gridType, cell);
+
+                var item = new JObject
+                {
+                    ["x"] = point.X,
+                    ["y"] = point.Y,
+                    ["cell"] = cell,
+                    ["is_valid_cell"] = valid
+                };
+
+                if (valid)
+                {
+                    validCells++;
+
+                    if (TryReadGridBool(gridType, "Solid", cell, out bool solid))
+                    {
+                        item["is_solid"] = solid;
+                    }
+
+                    if (TryReadGridBool(gridType, "Liquid", cell, out bool liquid))
+                    {
+                        item["is_liquid"] = liquid;
+                    }
+
+                    if (TryReadGridBool(gridType, "Gas", cell, out bool gas))
+                    {
+                        item["is_gas"] = gas;
+                    }
+
+                    if (TryReadGridBoolByMethod(gridType, "IsDug", cell, out bool isDug))
+                    {
+                        item["is_dug"] = isDug;
+                    }
+
+                    if (TryReadGridInt(gridType, "Element", cell, out int elementIndex))
+                    {
+                        item["element_index"] = elementIndex;
+                    }
+
+                    item["layers"] = BuildCellLayerSummary(gridType, cell);
+                }
+
+                cells.Add(item);
+            }
+
+            return new JObject
+            {
+                ["observed_at_utc"] = System.DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+                ["requested_points"] = points.Count,
+                ["valid_cells"] = validCells,
+                ["cells"] = cells
+            };
+        }
+
+        private static List<GridPointCoordinate> ParseGridPoints(JObject payload)
+        {
+            var result = new List<GridPointCoordinate>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            if (payload == null)
+            {
+                return result;
+            }
+
+            if (payload["x"] != null && payload["y"] != null
+                && payload["x"].Type == JTokenType.Integer
+                && payload["y"].Type == JTokenType.Integer)
+            {
+                AddGridPoint(payload["x"].Value<int>(), payload["y"].Value<int>(), result, seen);
+            }
+
+            if (payload["points"] is JArray points)
+            {
+                foreach (JToken token in points)
+                {
+                    if (!(token is JObject point))
+                    {
+                        continue;
+                    }
+
+                    if (point["x"] == null || point["y"] == null
+                        || point["x"].Type != JTokenType.Integer
+                        || point["y"].Type != JTokenType.Integer)
+                    {
+                        continue;
+                    }
+
+                    AddGridPoint(point["x"].Value<int>(), point["y"].Value<int>(), result, seen);
+                }
+            }
+
+            return result;
+        }
+
+        private static void AddGridPoint(int x, int y, List<GridPointCoordinate> output, HashSet<string> seen)
+        {
+            string key = x.ToString(CultureInfo.InvariantCulture) + ":" + y.ToString(CultureInfo.InvariantCulture);
+            if (!seen.Add(key))
+            {
+                return;
+            }
+
+            output.Add(new GridPointCoordinate
+            {
+                X = x,
+                Y = y
+            });
+        }
+
+        private static bool TryReadGridBool(Type gridType, string memberName, int cell, out bool value)
+        {
+            value = false;
+            if (gridType == null || string.IsNullOrWhiteSpace(memberName) || cell < 0)
+            {
+                return false;
+            }
+
+            object arrayCandidate = GetStaticMemberValue(gridType, memberName);
+            if (TryReadArrayCellValue(arrayCandidate, cell, out object raw))
+            {
+                if (raw is bool boolValue)
+                {
+                    value = boolValue;
+                    return true;
+                }
+
+                if (raw is int intValue)
+                {
+                    value = intValue != 0;
+                    return true;
+                }
+
+                if (raw is byte byteValue)
+                {
+                    value = byteValue != 0;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryReadGridBoolByMethod(Type gridType, string methodName, int cell, out bool value)
+        {
+            value = false;
+            if (gridType == null || string.IsNullOrWhiteSpace(methodName) || cell < 0)
+            {
+                return false;
+            }
+
+            MethodInfo method = gridType.GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, null, new[] { typeof(int) }, null);
+            if (method == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                object raw = method.Invoke(null, new object[] { cell });
+                if (raw is bool boolValue)
+                {
+                    value = boolValue;
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static bool TryReadGridInt(Type gridType, string memberName, int cell, out int value)
+        {
+            value = -1;
+            if (gridType == null || string.IsNullOrWhiteSpace(memberName) || cell < 0)
+            {
+                return false;
+            }
+
+            object arrayCandidate = GetStaticMemberValue(gridType, memberName);
+            if (!TryReadArrayCellValue(arrayCandidate, cell, out object raw))
+            {
+                return false;
+            }
+
+            if (raw is int intValue)
+            {
+                value = intValue;
+                return true;
+            }
+
+            if (raw is byte byteValue)
+            {
+                value = byteValue;
+                return true;
+            }
+
+            if (raw is short shortValue)
+            {
+                value = shortValue;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryReadArrayCellValue(object arrayCandidate, int cell, out object value)
+        {
+            value = null;
+            if (arrayCandidate == null || cell < 0)
+            {
+                return false;
+            }
+
+            if (arrayCandidate is Array array && array.Rank == 1 && cell < array.Length)
+            {
+                value = array.GetValue(cell);
+                return true;
+            }
+
+            if (arrayCandidate is IList list && cell < list.Count)
+            {
+                value = list[cell];
+                return true;
+            }
+
+            return false;
+        }
+
+        private static JObject BuildCellLayerSummary(Type gridType, int cell)
+        {
+            var result = new JObject();
+            string[] layerNames = { "Building", "FoundationTile", "Ladder", "Pickupables", "GasConduit", "LiquidConduit", "Wire" };
+            foreach (string layerName in layerNames)
+            {
+                result[layerName] = HasObjectInLayer(gridType, cell, layerName);
+            }
+
+            return result;
+        }
+
+        private static bool HasObjectInLayer(Type gridType, int cell, string layerName)
+        {
+            if (gridType == null || cell < 0 || string.IsNullOrWhiteSpace(layerName))
+            {
+                return false;
+            }
+
+            object objects = GetStaticMemberValue(gridType, "Objects");
+            if (!(objects is Array array) || array.Rank != 2)
+            {
+                return false;
+            }
+
+            if (!TryResolveObjectLayerIndex(layerName, out int layerIndex))
+            {
+                return false;
+            }
+
+            if (cell < 0 || cell >= array.GetLength(0)
+                || layerIndex < 0 || layerIndex >= array.GetLength(1))
+            {
+                return false;
+            }
+
+            object raw = array.GetValue(cell, layerIndex);
+            if (raw == null)
+            {
+                return false;
+            }
+
+            if (raw is int intValue)
+            {
+                return intValue >= 0;
+            }
+
+            return true;
+        }
+
+        private static bool TryResolveObjectLayerIndex(string layerName, out int layerIndex)
+        {
+            layerIndex = -1;
+            Type layerType = FindRuntimeType("ObjectLayer");
+            if (layerType == null || !layerType.IsEnum)
+            {
+                return false;
+            }
+
+            try
+            {
+                object parsed = Enum.Parse(layerType, layerName, true);
+                layerIndex = (int)Convert.ChangeType(parsed, typeof(int), CultureInfo.InvariantCulture);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static JObject BuildWorldSnapshotFromDuplicants()

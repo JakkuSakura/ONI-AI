@@ -6,6 +6,28 @@ info:
 servers:
   - url: /
 paths:
+  /runtime:
+    get:
+      summary: Runtime process timing for reload verification
+      responses:
+        '200':
+          description: Runtime timing state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runtime_started_at_utc, observed_at_utc, uptime_seconds]
+                properties:
+                  runtime_started_at_utc:
+                    type: string
+                    format: date-time
+                  observed_at_utc:
+                    type: string
+                    format: date-time
+                  uptime_seconds:
+                    type: integer
+                    minimum: 0
+
   /health:
     get:
       summary: Health and speed-control availability
@@ -531,6 +553,171 @@ paths:
                       additionalProperties: true
         '400':
           description: Invalid JSON or invalid priorities payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /actions/pending:
+    get:
+      summary: Read current duplicant pending chores snapshot
+      responses:
+        '200':
+          description: Pending action snapshot from live game
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source, observed_at_utc, counts, pending_actions]
+                properties:
+                  source:
+                    type: string
+                    enum: [game_live]
+                  observed_at_utc:
+                    type: string
+                  counts:
+                    type: object
+                    additionalProperties: true
+                  pending_actions:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+        '503':
+          description: Pending actions unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /actions/recent:
+    get:
+      summary: Read recent API action receipts
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: Recent action receipts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source, count, items]
+                properties:
+                  source:
+                    type: string
+                    enum: [runtime_receipts]
+                  count:
+                    type: integer
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+
+  /cells:
+    get:
+      summary: Inspect concrete cell facts around a coordinate
+      parameters:
+        - in: query
+          name: x
+          required: true
+          schema:
+            type: integer
+        - in: query
+          name: y
+          required: true
+          schema:
+            type: integer
+        - in: query
+          name: radius
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 20
+      responses:
+        '200':
+          description: Cell-level inspection data
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [observed_at_utc, requested_points, valid_cells, cells]
+                properties:
+                  observed_at_utc:
+                    type: string
+                  requested_points:
+                    type: integer
+                  valid_cells:
+                    type: integer
+                  cells:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+        '400':
+          description: Missing or invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Cell inspection unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /cells/{x}/{y}:
+    get:
+      summary: Inspect concrete cell facts around a coordinate (path form)
+      parameters:
+        - in: path
+          name: x
+          required: true
+          schema:
+            type: integer
+        - in: path
+          name: y
+          required: true
+          schema:
+            type: integer
+        - in: query
+          name: radius
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 20
+      responses:
+        '200':
+          description: Cell-level inspection data
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [observed_at_utc, requested_points, valid_cells, cells]
+                properties:
+                  observed_at_utc:
+                    type: string
+                  requested_points:
+                    type: integer
+                  valid_cells:
+                    type: integer
+                  cells:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+        '400':
+          description: Missing or invalid query parameters
           content:
             application/json:
               schema:

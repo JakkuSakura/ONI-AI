@@ -11,7 +11,24 @@ namespace OniAiAssistantRuntime
 {
     internal sealed class RuntimeApiBackend
     {
+        private static readonly DateTime runtimeStartedAtUtc = DateTime.UtcNow;
         private static bool speedThreeMappedToRuntimeTwo;
+        private static readonly object proofSync = new object();
+        private static readonly LinkedList<JObject> recentActionProofs = new LinkedList<JObject>();
+        private const int MaxActionProofs = 256;
+
+        public JObject BuildRuntimeInfo()
+        {
+            DateTime observedAtUtc = DateTime.UtcNow;
+            TimeSpan uptime = observedAtUtc - runtimeStartedAtUtc;
+
+            return new JObject
+            {
+                ["runtime_started_at_utc"] = runtimeStartedAtUtc.ToString("o", CultureInfo.InvariantCulture),
+                ["observed_at_utc"] = observedAtUtc.ToString("o", CultureInfo.InvariantCulture),
+                ["uptime_seconds"] = Math.Max(0, (int)Math.Floor(uptime.TotalSeconds))
+            };
+        }
 
         public JObject BuildHealth(OniAiController controller)
         {
@@ -73,6 +90,7 @@ namespace OniAiAssistantRuntime
 
             if (directPayload != null)
             {
+                RecordActionProof("set_speed", new JObject { ["speed"] = requested }, directPayload, null);
                 return directPayload;
             }
 
@@ -107,7 +125,7 @@ namespace OniAiAssistantRuntime
 
             string status = currentSpeed == requested ? "applied" : "rejected";
 
-            return new JObject
+            var result = new JObject
             {
                 ["status"] = status,
                 ["requested_speed"] = requested,
@@ -116,6 +134,9 @@ namespace OniAiAssistantRuntime
                 ["runtime_speed"] = runtimeSpeed,
                 ["mapped_compatibility_mode"] = mapped
             };
+
+            RecordActionProof("set_speed", new JObject { ["speed"] = requested }, result, status == "applied" ? null : "speed_rejected");
+            return result;
         }
 
         public JObject BuildPause()
@@ -152,12 +173,15 @@ namespace OniAiAssistantRuntime
                 InvokeByName(speedControl, "SetSpeed", currentSpeed);
             }
 
-            return new JObject
+            var result = new JObject
             {
                 ["status"] = "applied",
                 ["paused"] = ReadBoolByMemberName(speedControl, "IsPaused", true),
                 ["speed"] = NormalizeApiSpeedForCompatibility(Mathf.Clamp(ReadIntByName(speedControl, "GetSpeed", 1), 1, 3))
             };
+
+            RecordActionProof("set_pause", new JObject { ["paused"] = paused }, result, null);
+            return result;
         }
 
         private static int NormalizeApiSpeedForCompatibility(int speed)
@@ -198,11 +222,14 @@ namespace OniAiAssistantRuntime
             }
 
             string message = InvokeInstance<string>(controller, "ApplyResearchAction", payload);
-            return new JObject
+            var result = new JObject
             {
                 ["status"] = "applied",
                 ["message"] = message
             };
+
+            RecordActionProof("set_research", payload, result, null);
+            return result;
         }
 
         public JObject BuildPriorities()
@@ -325,13 +352,87 @@ namespace OniAiAssistantRuntime
                 results.Add(result);
             }
 
-            return new JObject
+            var resultPayload = new JObject
             {
                 ["accepted"] = accepted,
                 ["failed"] = failed,
                 ["status"] = failed == 0 ? "applied" : (accepted > 0 ? "partial" : "failed"),
                 ["results"] = results
             };
+
+            RecordActionProof("set_priorities", payload, resultPayload, failed > 0 ? "priority_update_partial_or_failed" : null);
+            return resultPayload;
+        }
+
+        public JObject BuildPendingActionsProof()
+        {
+            JArray pending = InvokeStatic<JArray>("BuildPendingActionsSnapshot") ?? new JArray();
+            int withCurrent = 0;
+            int withQueues = 0;
+
+            foreach (JToken token in pending)
+            {
+                if (!(token is JObject item))
+                {
+                    continue;
+                }
+
+                if (item["current_action"] != null)
+                {
+                    withCurrent++;
+                }
+
+                if (item["chores"] is JArray chores && chores.Count > 0)
+                {
+                    withQueues++;
+                }
+            }
+
+            return new JObject
+            {
+                ["source"] = "game_live",
+                ["observed_at_utc"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+                ["counts"] = new JObject
+                {
+                    ["duplicants"] = pending.Count,
+                    ["with_current_action"] = withCurrent,
+                    ["with_chore_queue"] = withQueues
+                },
+                ["pending_actions"] = pending
+            };
+        }
+
+        public JObject BuildActionProofs(int limit)
+        {
+            int bounded = Mathf.Clamp(limit, 1, 200);
+            var items = new JArray();
+
+            lock (proofSync)
+            {
+                LinkedListNode<JObject> node = recentActionProofs.Last;
+                while (node != null && items.Count < bounded)
+                {
+                    items.Add(node.Value.DeepClone());
+                    node = node.Previous;
+                }
+            }
+
+            return new JObject
+            {
+                ["source"] = "runtime_receipts",
+                ["count"] = items.Count,
+                ["items"] = items
+            };
+        }
+
+        public JObject BuildCellProof(JObject payload)
+        {
+            if (payload == null)
+            {
+                return null;
+            }
+
+            return InvokeStatic<JObject>("BuildCellProofPayload", payload);
         }
 
         private static bool TryFindPriorityEntry(JArray snapshot, JObject parameters, out JObject currentValues)
@@ -465,11 +566,14 @@ namespace OniAiAssistantRuntime
             }
 
             string message = InvokeInstance<string>(controller, "ApplyBuildAction", payload);
-            return new JObject
+            var result = new JObject
             {
                 ["status"] = "applied",
                 ["message"] = message
             };
+
+            RecordActionProof("build", payload, result, null);
+            return result;
         }
 
         public JObject ApplyDig(OniAiController controller, JObject payload)
@@ -480,11 +584,14 @@ namespace OniAiAssistantRuntime
             }
 
             string message = InvokeInstance<string>(controller, "ApplyDigAction", payload);
-            return new JObject
+            var result = new JObject
             {
                 ["status"] = "applied",
                 ["message"] = message
             };
+
+            RecordActionProof("dig", payload, result, null);
+            return result;
         }
 
         public JObject ApplyDeconstruct(OniAiController controller, JObject payload)
@@ -495,11 +602,40 @@ namespace OniAiAssistantRuntime
             }
 
             string message = InvokeInstance<string>(controller, "ApplyDeconstructAction", payload);
-            return new JObject
+            var result = new JObject
             {
                 ["status"] = "applied",
                 ["message"] = message
             };
+
+            RecordActionProof("deconstruct", payload, result, null);
+            return result;
+        }
+
+        private static void RecordActionProof(string actionType, JObject request, JObject response, string error)
+        {
+            var item = new JObject
+            {
+                ["action_type"] = actionType ?? string.Empty,
+                ["observed_at_utc"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+                ["request"] = request != null ? request.DeepClone() : new JObject(),
+                ["response"] = response != null ? response.DeepClone() : new JObject(),
+                ["status"] = string.IsNullOrWhiteSpace(error) ? "ok" : "failed"
+            };
+
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                item["error"] = error;
+            }
+
+            lock (proofSync)
+            {
+                recentActionProofs.AddLast(item);
+                while (recentActionProofs.Count > MaxActionProofs)
+                {
+                    recentActionProofs.RemoveFirst();
+                }
+            }
         }
 
         private static bool TryGetSpeedControl(out object speedControl)

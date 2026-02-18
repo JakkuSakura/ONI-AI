@@ -142,6 +142,7 @@ Built-in ONI-side HTTP server keys:
 
 ONI-side HTTP endpoints:
 
+- `GET /runtime` -> runtime start timestamp + uptime, useful to confirm runtime reload actually swapped
 - `GET /health` -> basic liveness and busy status
 - `GET /state` -> latest captured state plus last execution summary
 - `GET /actions` -> current game pending actions (what duplicants can work on)

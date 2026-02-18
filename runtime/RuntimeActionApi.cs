@@ -8,6 +8,7 @@ namespace OniAiAssistantRuntime
     internal sealed class RuntimeActionApi
     {
         private readonly RuntimeApiBackend backend = new RuntimeApiBackend();
+        private readonly RuntimeMainThreadExecutor executor = new RuntimeMainThreadExecutor();
 
         public bool Handle(OniAiController controller, HttpListenerContext context, string method, string path)
         {
@@ -30,7 +31,6 @@ namespace OniAiAssistantRuntime
                 return true;
             }
 
-            JObject payload;
             if (string.Equals(path, "/build", StringComparison.Ordinal))
             {
                 if (!HasExplicitTarget(body))
@@ -39,9 +39,10 @@ namespace OniAiAssistantRuntime
                     return true;
                 }
 
-                payload = backend.ApplyBuild(controller, body);
+                return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.ApplyBuild(controller, body), "action_unavailable"));
             }
-            else if (string.Equals(path, "/dig", StringComparison.Ordinal))
+
+            if (string.Equals(path, "/dig", StringComparison.Ordinal))
             {
                 if (!HasExplicitTarget(body))
                 {
@@ -49,21 +50,16 @@ namespace OniAiAssistantRuntime
                     return true;
                 }
 
-                payload = backend.ApplyDig(controller, body);
+                return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.ApplyDig(controller, body), "action_unavailable"));
             }
-            else
+
+            if (!HasExplicitTarget(body))
             {
-                if (!HasExplicitTarget(body))
-                {
-                    RuntimeJson.WriteJson(context.Response, 400, new JObject { ["error"] = "deconstruct_requires_explicit_target" });
-                    return true;
-                }
-
-                payload = backend.ApplyDeconstruct(controller, body);
+                RuntimeJson.WriteJson(context.Response, 400, new JObject { ["error"] = "deconstruct_requires_explicit_target" });
+                return true;
             }
 
-            RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "action_unavailable" });
-            return true;
+            return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.ApplyDeconstruct(controller, body), "action_unavailable"));
         }
 
         private static bool HasExplicitTarget(JObject body)

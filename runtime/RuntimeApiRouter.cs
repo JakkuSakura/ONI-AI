@@ -11,6 +11,7 @@ namespace OniAiAssistantRuntime
         private readonly RuntimeActionApi actionApi = new RuntimeActionApi();
         private readonly RuntimeCatalogApi catalogApi = new RuntimeCatalogApi();
         private readonly RuntimePrioritiesApi prioritiesApi = new RuntimePrioritiesApi();
+        private readonly RuntimeProofApi proofApi = new RuntimeProofApi();
 
         public bool Handle(OniAiController controller, HttpListenerContext context)
         {
@@ -43,6 +44,11 @@ namespace OniAiAssistantRuntime
             }
 
             if (prioritiesApi.Handle(controller, context, method, path))
+            {
+                return true;
+            }
+
+            if (proofApi.Handle(controller, context, method, path))
             {
                 return true;
             }

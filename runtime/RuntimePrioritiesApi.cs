@@ -7,6 +7,7 @@ namespace OniAiAssistantRuntime
     internal sealed class RuntimePrioritiesApi
     {
         private readonly RuntimeApiBackend backend = new RuntimeApiBackend();
+        private readonly RuntimeMainThreadExecutor executor = new RuntimeMainThreadExecutor();
 
         public bool Handle(OniAiController controller, System.Net.HttpListenerContext context, string method, string path)
         {
@@ -17,9 +18,7 @@ namespace OniAiAssistantRuntime
 
             if (string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
             {
-                JObject payload = backend.BuildPriorities();
-                RuntimeJson.WriteJson(context.Response, 200, payload);
-                return true;
+                return executor.Execute(controller, context, () => RuntimeApiResult.Json(200, backend.BuildPriorities()));
             }
 
             if (string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
@@ -31,17 +30,7 @@ namespace OniAiAssistantRuntime
                     return true;
                 }
 
-                try
-                {
-                    JObject payload = backend.ApplyPriorities(body);
-                    RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "action_unavailable" });
-                }
-                catch (InvalidOperationException exception)
-                {
-                    RuntimeJson.WriteJson(context.Response, 400, new JObject { ["error"] = exception.Message });
-                }
-
-                return true;
+                return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.ApplyPriorities(body), "action_unavailable"));
             }
 
             return false;

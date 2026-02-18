@@ -7,24 +7,27 @@ namespace OniAiAssistantRuntime
     internal sealed class RuntimeControlApi
     {
         private readonly RuntimeApiBackend backend = new RuntimeApiBackend();
+        private readonly RuntimeMainThreadExecutor executor = new RuntimeMainThreadExecutor();
 
         public bool Handle(OniAiController controller, System.Net.HttpListenerContext context, string method, string path)
         {
+            if (string.Equals(path, "/runtime", StringComparison.Ordinal)
+                && string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
+            {
+                return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.BuildRuntimeInfo(), "runtime_info_unavailable"));
+            }
+
             if (string.Equals(path, "/health", StringComparison.Ordinal)
                 && string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
             {
-                JObject payload = backend.BuildHealth(controller);
-                RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "speed_control_unavailable" });
-                return true;
+                return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.BuildHealth(controller), "speed_control_unavailable"));
             }
 
             if (string.Equals(path, "/speed", StringComparison.Ordinal))
             {
                 if (string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
                 {
-                    JObject payload = backend.BuildSpeed();
-                    RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "speed_control_unavailable" });
-                    return true;
+                    return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.BuildSpeed(), "speed_control_unavailable"));
                 }
 
                 if (string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
@@ -49,9 +52,7 @@ namespace OniAiAssistantRuntime
                         return true;
                     }
 
-                    JObject payload = backend.ApplySpeed(speed);
-                    RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "speed_control_unavailable" });
-                    return true;
+                    return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.ApplySpeed(speed), "speed_control_unavailable"));
                 }
 
                 return false;
@@ -61,9 +62,7 @@ namespace OniAiAssistantRuntime
             {
                 if (string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
                 {
-                    JObject payload = backend.BuildPause();
-                    RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "speed_control_unavailable" });
-                    return true;
+                    return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.BuildPause(), "speed_control_unavailable"));
                 }
 
                 if (string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
@@ -82,9 +81,7 @@ namespace OniAiAssistantRuntime
                     }
 
                     bool paused = body["paused"].Value<bool>();
-                    JObject payload = backend.ApplyPause(paused);
-                    RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "speed_control_unavailable" });
-                    return true;
+                    return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.ApplyPause(paused), "speed_control_unavailable"));
                 }
 
                 return false;

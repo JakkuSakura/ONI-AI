@@ -7,24 +7,21 @@ namespace OniAiAssistantRuntime
     internal sealed class RuntimeCatalogApi
     {
         private readonly RuntimeApiBackend backend = new RuntimeApiBackend();
+        private readonly RuntimeMainThreadExecutor executor = new RuntimeMainThreadExecutor();
 
         public bool Handle(OniAiController controller, System.Net.HttpListenerContext context, string method, string path)
         {
             if (string.Equals(path, "/buildings", StringComparison.Ordinal)
                 && string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
             {
-                JObject payload = backend.BuildBuildings();
-                RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "building_catalog_unavailable" });
-                return true;
+                return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.BuildBuildings(), "building_catalog_unavailable"));
             }
 
             if (string.Equals(path, "/research", StringComparison.Ordinal))
             {
                 if (string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
                 {
-                    JObject payload = backend.BuildResearch();
-                    RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "research_catalog_unavailable" });
-                    return true;
+                    return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.BuildResearch(), "research_catalog_unavailable"));
                 }
 
                 if (string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
@@ -36,17 +33,7 @@ namespace OniAiAssistantRuntime
                         return true;
                     }
 
-                    try
-                    {
-                        JObject payload = backend.ApplyResearch(controller, body);
-                        RuntimeJson.WriteJson(context.Response, payload != null ? 200 : 503, payload ?? new JObject { ["error"] = "research_catalog_unavailable" });
-                    }
-                    catch (Exception exception)
-                    {
-                        RuntimeJson.WriteJson(context.Response, 400, new JObject { ["error"] = exception.Message });
-                    }
-
-                    return true;
+                    return executor.Execute(controller, context, () => RuntimeApiResult.Optional(backend.ApplyResearch(controller, body), "research_catalog_unavailable"));
                 }
 
                 return false;
