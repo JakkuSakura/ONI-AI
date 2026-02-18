@@ -21,13 +21,20 @@ var requestCounters = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCa
 {
     ["/health"] = 0,
     ["/state"] = 0,
-    ["/actions_get"] = 0,
-    ["/actions_post"] = 0,
+    ["/speed_get"] = 0,
+    ["/speed_post"] = 0,
+    ["/pause_get"] = 0,
+    ["/pause_post"] = 0,
+    ["/build_post"] = 0,
+    ["/dig_post"] = 0,
+    ["/deconstruct_post"] = 0,
+    ["/research_post"] = 0,
     ["/priorities_get"] = 0,
     ["/priorities_post"] = 0,
 };
 
 var priorityUpdates = new JsonArray();
+var operationLog = new JsonArray();
 
 var statePayload = new JsonObject
 {
@@ -235,13 +242,26 @@ while (true)
         continue;
     }
 
-    if (path == "/actions" && method.Equals("GET", StringComparison.OrdinalIgnoreCase))
+    if (path == "/speed" && method.Equals("GET", StringComparison.OrdinalIgnoreCase))
     {
-        requestCounters["/actions_get"]++;
+        requestCounters["/speed_get"]++;
+        var contextState = statePayload["context"]?.AsObject();
         await WriteJson(context.Response, 200, new JsonObject
         {
-            ["actions"] = queuedActions,
-            ["source"] = "game_pending",
+            ["speed"] = contextState? ["current_speed"]?.GetValue<int>() ?? 1,
+            ["paused"] = contextState? ["paused"]?.GetValue<bool>() ?? false,
+        });
+        continue;
+    }
+
+    if (path == "/pause" && method.Equals("GET", StringComparison.OrdinalIgnoreCase))
+    {
+        requestCounters["/pause_get"]++;
+        var contextState = statePayload["context"]?.AsObject();
+        await WriteJson(context.Response, 200, new JsonObject
+        {
+            ["paused"] = contextState? ["paused"]?.GetValue<bool>() ?? false,
+            ["speed"] = contextState? ["current_speed"]?.GetValue<int>() ?? 1,
         });
         continue;
     }
@@ -258,9 +278,9 @@ while (true)
         continue;
     }
 
-    if (path == "/actions" && method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+    if (path == "/speed" && method.Equals("POST", StringComparison.OrdinalIgnoreCase))
     {
-        requestCounters["/actions_post"]++;
+        requestCounters["/speed_post"]++;
         JsonNode? rootNode;
         try
         {
@@ -274,23 +294,111 @@ while (true)
             continue;
         }
 
-        if (rootNode is not JsonObject bodyObject || bodyObject["actions"] is not JsonArray incomingActions)
+        if (rootNode is not JsonObject bodyObject || bodyObject["speed"] is null)
         {
-            await WriteJson(context.Response, 400, new JsonObject { ["error"] = "actions_must_be_array" });
+            await WriteJson(context.Response, 400, new JsonObject { ["error"] = "speed_required" });
             continue;
         }
 
-        var accepted = 0;
-        foreach (var item in incomingActions)
+        int speed;
+        try
         {
-            if (item is JsonObject action)
-            {
-                queuedActions.Add(action.DeepClone());
-                accepted++;
-            }
+            speed = bodyObject["speed"]!.GetValue<int>();
+        }
+        catch
+        {
+            await WriteJson(context.Response, 400, new JsonObject { ["error"] = "invalid_speed" });
+            continue;
         }
 
-        await WriteJson(context.Response, 200, new JsonObject { ["accepted"] = accepted });
+        if (speed < 1 || speed > 3)
+        {
+            await WriteJson(context.Response, 400, new JsonObject { ["error"] = "invalid_speed" });
+            continue;
+        }
+
+        var contextObject = statePayload["context"]!.AsObject();
+        contextObject["current_speed"] = speed;
+        contextObject["paused"] = false;
+        operationLog.Add(new JsonObject { ["type"] = "speed", ["speed"] = speed });
+
+        await WriteJson(context.Response, 200, new JsonObject { ["status"] = "applied", ["speed"] = speed, ["paused"] = false });
+        continue;
+    }
+
+    if (path == "/pause" && method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+    {
+        requestCounters["/pause_post"]++;
+        JsonNode? rootNode;
+        try
+        {
+            using var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding ?? Encoding.UTF8);
+            var body = await reader.ReadToEndAsync();
+            rootNode = JsonNode.Parse(body);
+        }
+        catch
+        {
+            await WriteJson(context.Response, 400, new JsonObject { ["error"] = "invalid_json" });
+            continue;
+        }
+
+        if (rootNode is not JsonObject bodyObject || bodyObject["paused"] is null)
+        {
+            await WriteJson(context.Response, 400, new JsonObject { ["error"] = "paused_required" });
+            continue;
+        }
+
+        bool paused;
+        try
+        {
+            paused = bodyObject["paused"]!.GetValue<bool>();
+        }
+        catch
+        {
+            await WriteJson(context.Response, 400, new JsonObject { ["error"] = "invalid_paused" });
+            continue;
+        }
+
+        var contextObject = statePayload["context"]!.AsObject();
+        contextObject["paused"] = paused;
+        operationLog.Add(new JsonObject { ["type"] = "pause", ["paused"] = paused });
+
+        await WriteJson(context.Response, 200, new JsonObject
+        {
+            ["status"] = "applied",
+            ["paused"] = paused,
+            ["speed"] = contextObject["current_speed"]?.GetValue<int>() ?? 1,
+        });
+        continue;
+    }
+
+    if ((path == "/build" || path == "/dig" || path == "/deconstruct" || path == "/research") && method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+    {
+        requestCounters[path + "_post"]++;
+        JsonNode? rootNode;
+        try
+        {
+            using var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding ?? Encoding.UTF8);
+            var body = await reader.ReadToEndAsync();
+            rootNode = JsonNode.Parse(body);
+        }
+        catch
+        {
+            await WriteJson(context.Response, 400, new JsonObject { ["error"] = "invalid_json" });
+            continue;
+        }
+
+        operationLog.Add(new JsonObject
+        {
+            ["type"] = path.TrimStart('/'),
+            ["request"] = rootNode?.DeepClone(),
+        });
+
+        await WriteJson(context.Response, 200, new JsonObject
+        {
+            ["status"] = "applied",
+            ["endpoint"] = path,
+        });
         continue;
     }
 
@@ -352,12 +460,19 @@ while (true)
             {
                 ["health"] = requestCounters["/health"],
                 ["state"] = requestCounters["/state"],
-                ["actions_get"] = requestCounters["/actions_get"],
-                ["actions_post"] = requestCounters["/actions_post"],
+                ["speed_get"] = requestCounters["/speed_get"],
+                ["speed_post"] = requestCounters["/speed_post"],
+                ["pause_get"] = requestCounters["/pause_get"],
+                ["pause_post"] = requestCounters["/pause_post"],
+                ["build_post"] = requestCounters["/build_post"],
+                ["dig_post"] = requestCounters["/dig_post"],
+                ["deconstruct_post"] = requestCounters["/deconstruct_post"],
+                ["research_post"] = requestCounters["/research_post"],
                 ["priorities_get"] = requestCounters["/priorities_get"],
                 ["priorities_post"] = requestCounters["/priorities_post"],
             },
             ["pending_action_count"] = queuedActions.Count,
+            ["operation_log"] = operationLog,
         });
         continue;
     }

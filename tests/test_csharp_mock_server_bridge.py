@@ -36,6 +36,7 @@ def _assert_meaningful_action(action: dict) -> None:
     assert isinstance(action, dict)
     action_type = str(action.get("type", "")).strip()
     assert action_type in {
+        "set_speed",
         "priority",
         "build",
         "dig",
@@ -92,27 +93,14 @@ def test_bridge_with_csharp_mock_server(tmp_path: Path) -> None:
     try:
         _wait_server_ready(mock_base)
 
-        post_status, post_payload = _http_json(
-            f"{mock_base}/actions",
-            method="POST",
-            body={
-                "actions": [
-                    {
-                        "id": "seed-action",
-                        "type": "priority",
-                        "params": {"target_id": "act_001", "priority": 8},
-                    }
-                ]
-            },
-        )
+        post_status, post_payload = _http_json(f"{mock_base}/speed", method="POST", body={"speed": 2})
         assert post_status == 200
-        assert post_payload["accepted"] == 1
+        assert post_payload["status"] == "applied"
+        assert post_payload["speed"] == 2
 
-        get_status, get_payload = _http_json(f"{mock_base}/actions")
+        get_status, get_payload = _http_json(f"{mock_base}/speed")
         assert get_status == 200
-        assert isinstance(get_payload.get("actions"), list)
-        assert len(get_payload["actions"]) >= 1
-        _assert_meaningful_action(get_payload["actions"][0])
+        assert get_payload["speed"] == 2
 
         request_dir = tmp_path / "request"
         request_dir.mkdir(parents=True)
@@ -185,7 +173,7 @@ def test_bridge_with_csharp_mock_server(tmp_path: Path) -> None:
         stats_status, stats_payload = _http_json(f"{mock_base}/stats")
         assert stats_status == 200
         assert stats_payload["counters"]["state"] >= 1
-        assert stats_payload["counters"]["actions_post"] >= 1
+        assert stats_payload["counters"]["speed_post"] >= 1
         assert stats_payload["counters"]["priorities_get"] >= 0
 
     finally:
@@ -222,15 +210,15 @@ def test_bridge_allows_codex_live_post_actions(tmp_path: Path) -> None:
             "args=\"$*\"\n"
             "api_base_url=$(printf '%s' \"$args\" | sed -nE 's/.*api_base_url=(http[^; ]+).*/\\1/p')\n"
             "state_url=\"$api_base_url/state\"\n"
-            "actions_url=\"$api_base_url/actions\"\n"
+            "speed_url=\"$api_base_url/speed\"\n"
             "if [ -n \"$api_base_url\" ]; then\n"
             f"  state_payload=$({curl} -sS \"$state_url\")\n"
             "  is_paused=$(printf '%s' \"$state_payload\" | grep -c '\"paused\":true' || true)\n"
-            "  if [ \"$is_paused\" -gt 0 ] && [ -n \"$actions_url\" ]; then\n"
-            f"    {curl} -sS -X POST \"$actions_url\" -H 'Content-Type: application/json' --data-binary '{{\"actions\":[{{\"id\":\"live-posted\",\"type\":\"priority\",\"params\":{{\"target_id\":\"act_001\",\"priority\":9}}}}]}}' >/dev/null\n"
+            "  if [ \"$is_paused\" -gt 0 ] && [ -n \"$speed_url\" ]; then\n"
+            f"    {curl} -sS -X POST \"$speed_url\" -H 'Content-Type: application/json' --data-binary '{{\"speed\":2}}' >/dev/null\n"
             "  fi\n"
             "fi\n"
-            "echo '{\"analysis\":\"Posted live action while paused\",\"suggestions\":[\"Live-posted urgent priority update\"],\"actions\":[{\"id\":\"mirror-live-post\",\"type\":\"priority\",\"params\":{\"target_id\":\"act_001\",\"priority\":9}}],\"notes\":\"Codex performed on-the-fly POST /actions during paused planning.\"}'\n",
+            "echo '{\"analysis\":\"Applied live speed change while paused\",\"suggestions\":[\"Resume controlled progress at speed 2\"],\"actions\":[{\"id\":\"mirror-live-speed\",\"type\":\"set_speed\",\"params\":{\"speed\":2}}],\"notes\":\"Codex performed on-the-fly POST /speed during paused planning.\"}'\n",
             encoding="utf-8",
         )
         fake_codex.chmod(0o755)
@@ -280,14 +268,11 @@ def test_bridge_allows_codex_live_post_actions(tmp_path: Path) -> None:
         stats_status, stats_payload = _http_json(f"{mock_base}/stats")
         assert stats_status == 200
         assert stats_payload["counters"]["state"] >= 1
-        assert stats_payload["counters"]["actions_post"] >= 1
+        assert stats_payload["counters"]["speed_post"] >= 1
 
-        actions_status, actions_payload = _http_json(f"{mock_base}/actions")
-        assert actions_status == 200
-        queued_actions = actions_payload.get("actions", [])
-        posted_actions = [action for action in queued_actions if action.get("id") == "live-posted"]
-        assert len(posted_actions) >= 1
-        _assert_meaningful_action(posted_actions[0])
+        speed_status, speed_payload = _http_json(f"{mock_base}/speed")
+        assert speed_status == 200
+        assert speed_payload.get("speed") == 2
 
         priorities_post_status, priorities_post_payload = _http_json(
             f"{mock_base}/priorities",

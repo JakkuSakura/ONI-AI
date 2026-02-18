@@ -68,8 +68,9 @@ def test_build_prompt_mentions_screenshot_flag() -> None:
     assert "api_base_url=http://127.0.0.1:8766" in prompt_with_image
     assert "set_duplicant_priority" in prompt_with_image
     assert "Do not run broad exploratory shell scans" in prompt_with_image
-    assert "POST /actions and POST /priorities" in prompt_with_image
-    assert "GET /state and GET /priorities" in prompt_with_image
+    assert "POST /speed" in prompt_with_image
+    assert "POST /build" in prompt_with_image
+    assert "GET /state, GET /priorities, and GET /speed" in prompt_with_image
     assert "wiki.gg/Oxygen_Not_Included" in prompt_with_image
     assert "oxygennotincluded.wiki.gg" in prompt_with_image
 

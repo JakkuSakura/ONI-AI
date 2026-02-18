@@ -1,6 +1,5 @@
 import json
 import os
-import uuid
 from urllib import error, request
 
 import pytest
@@ -60,39 +59,22 @@ def test_oni_http_state_reports_paused_context() -> None:
 
 
 @pytest.mark.oni_live
-def test_oni_http_post_actions_then_query_actions() -> None:
+def test_oni_http_post_speed_then_query_speed() -> None:
     base_url = _require_live_oni()
 
-    action_id = f"live_test_priority_{uuid.uuid4().hex[:10]}"
-    action = {
-        "id": action_id,
-        "type": "priority",
-        "params": {
-            "target_id": "act_001",
-            "priority": 8,
-        },
-    }
-
     post_status, post_payload = _http_json(
-        f"{base_url}/actions",
+        f"{base_url}/speed",
         method="POST",
-        body={"actions": [action]},
+        body={"speed": 1},
     )
     assert post_status == 200
-    assert isinstance(post_payload.get("accepted"), int)
-    assert post_payload["accepted"] >= 1
+    assert post_payload.get("status") == "applied"
+    assert post_payload.get("speed") == 1
 
-    get_status, get_payload = _http_json(f"{base_url}/actions")
+    get_status, get_payload = _http_json(f"{base_url}/speed")
     assert get_status == 200
-
-    actions = get_payload.get("actions")
-    assert isinstance(actions, list)
-
-    matched = [candidate for candidate in actions if isinstance(candidate, dict) and candidate.get("id") == action_id]
-    assert len(matched) >= 1
-    assert matched[0].get("type") == "priority"
-    assert isinstance(matched[0].get("params"), dict)
-    assert matched[0]["params"].get("priority") == 8
+    assert get_payload.get("speed") == 1
+    assert isinstance(get_payload.get("paused"), bool)
 
 
 @pytest.mark.oni_live

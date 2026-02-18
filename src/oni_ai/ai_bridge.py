@@ -20,7 +20,6 @@ RUNTIME_STATE_LOCK = threading.Lock()
 RUNTIME_STATE: dict[str, object] = {
     "last_request": None,
     "last_response": None,
-    "manual_actions": [],
 }
 JOB_STATE_LOCK = threading.Lock()
 JOB_STATE: dict[str, dict[str, object]] = {}
@@ -82,7 +81,6 @@ def get_runtime_state_snapshot() -> dict:
         return {
             "last_request": RUNTIME_STATE.get("last_request"),
             "last_response": RUNTIME_STATE.get("last_response"),
-            "manual_actions": list(RUNTIME_STATE.get("manual_actions") or []),
         }
 
 
@@ -95,16 +93,10 @@ def set_last_analyze_payload(payload: dict, normalized_response: str) -> None:
             RUNTIME_STATE["last_response"] = {"actions": []}
 
 
-def set_manual_actions(actions: list[dict]) -> None:
-    with RUNTIME_STATE_LOCK:
-        RUNTIME_STATE["manual_actions"] = actions
-
-
 def reset_runtime_state_for_tests() -> None:
     with RUNTIME_STATE_LOCK:
         RUNTIME_STATE["last_request"] = None
         RUNTIME_STATE["last_response"] = None
-        RUNTIME_STATE["manual_actions"] = []
 
     with JOB_STATE_LOCK:
         JOB_STATE.clear()
@@ -273,8 +265,8 @@ def build_prompt(payload: dict, has_screenshot: bool) -> str:
             "Do NOT return a trivial single-action plan (for example only set_speed) unless there is a clear emergency reason; "
             "if so, explain that reason in notes. "
             "Prefer actions that directly improve survival margin and execution clarity: "
-            "priority, set_duplicant_priority, set_duplicant_skills, build, dig, research, arrangement, plus speed control when needed. "
-            "Assign a reasonable amount of actions, cancel outdated actions, and optionally update action priorities when execution order should change. "
+            "priority, set_duplicant_priority, set_duplicant_skills, build, dig, deconstruct, research, arrangement, plus speed control when needed. "
+            "Assign a reasonable amount of actions and optionally update action priorities when execution order should change. "
             "Be foreseeable and predictive: push the colony toward final goals of sustainable living and advanced technologies, including aerospace. "
             "Use cancel when a previously proposed action is unsafe or conflicts with survival goals. "
             "Always include stable action ids and concrete params. "
@@ -284,9 +276,10 @@ def build_prompt(payload: dict, has_screenshot: bool) -> str:
             "Use concise targeted reads and limit shell calls to minimal API checks. "
             "You may query ONI wiki sources for mechanics/building/research facts when needed: wiki.gg/Oxygen_Not_Included, oxygennotincluded.wiki.gg, oni-db.com, and klei.com forums. "
             "Use targeted lookups only; avoid broad web crawling. "
-            "When state context is paused and api_base_url is available, you may submit immediate updates via POST /actions and POST /priorities while planning. "
+            "When state context is paused and api_base_url is available, you may submit immediate updates via concrete endpoints such as "
+            "POST /speed, POST /pause, POST /build, POST /dig, POST /deconstruct, POST /research, and POST /priorities while planning. "
             "If you do live POST, keep it minimal, survival-focused, and still return final JSON plan. "
-            "After reading openapi.yaml, first call GET /state and GET /priorities, then plan. "
+            "After reading openapi.yaml, first call GET /state, GET /priorities, and GET /speed, then plan. "
             "Return ONLY JSON with top-level keys in this order: analysis, suggestions, actions, notes. "
             "analysis should summarize colony risk and why the plan helps survival. "
             "suggestions should be concise human-readable bullets as an array of strings."
@@ -298,8 +291,8 @@ def build_prompt(payload: dict, has_screenshot: bool) -> str:
         api_note = (
             f"ONI API api_base_url={api_base_url}; "
             "read endpoint paths from ./openapi.yaml. "
-            "Use GET /state and GET /priorities as primary source of truth. "
-            "Use POST /actions and POST /priorities for live updates when paused."
+            "Use GET /state, GET /priorities, GET /speed, and GET /pause as primary source of truth. "
+            "Use concrete POST endpoints (speed/pause/build/dig/deconstruct/research/priorities) for live updates when paused."
         )
     else:
         api_note = (
@@ -617,22 +610,6 @@ class OniAiHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"state": last_request})
             return
 
-        if path == "/actions":
-            snapshot = get_runtime_state_snapshot()
-            response_actions = []
-            last_response = snapshot.get("last_response")
-            if isinstance(last_response, dict) and isinstance(last_response.get("actions"), list):
-                response_actions = last_response.get("actions")
-
-            self.send_json(
-                200,
-                {
-                    "manual_actions": snapshot.get("manual_actions") or [],
-                    "last_response_actions": response_actions,
-                },
-            )
-            return
-
         LOGGER.warning("trace=%s path=%s method=GET => 404", trace_id, path)
         self.send_response(404)
         self.end_headers()
@@ -641,34 +618,6 @@ class OniAiHandler(BaseHTTPRequestHandler):
         started_at = time.monotonic()
         trace_id = uuid.uuid4().hex[:8]
         path = urlsplit(self.path).path
-
-        if path == "/actions":
-            content_length = int(self.headers.get("Content-Length", "0"))
-            raw_body = self.rfile.read(content_length)
-            try:
-                payload = json.loads(raw_body.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                self.send_json(400, {"error": "invalid_json"})
-                return
-
-            actions = payload.get("actions") if isinstance(payload, dict) else None
-            if not isinstance(actions, list):
-                self.send_json(400, {"error": "actions_must_be_list"})
-                return
-
-            normalized_actions = []
-            for item in actions:
-                if not isinstance(item, dict):
-                    continue
-                normalized_item = dict(item)
-                item_type = str(normalized_item.get("type") or normalized_item.get("action") or "").strip()
-                if item_type:
-                    normalized_item["type"] = item_type
-                normalized_actions.append(normalized_item)
-
-            set_manual_actions(normalized_actions)
-            self.send_json(200, {"accepted": len(normalized_actions)})
-            return
 
         if path.rstrip("/") != "/analyze":
             LOGGER.warning("trace=%s path=%s method=POST => 404", trace_id, path)
