@@ -1017,7 +1017,19 @@ public sealed class OniAiController : MonoBehaviour
         private static JObject BuildDuplicantPriorityObject(MonoBehaviour identity)
         {
             var priority = new JObject();
+
+            Component choreConsumer = FindComponentByTypeName(identity.gameObject, "ChoreConsumer");
+            if (choreConsumer != null && TryBuildPrioritySnapshotFromChoreConsumer(choreConsumer, out JObject livePriority) && livePriority.Count > 0)
+            {
+                return livePriority;
+            }
+
             Component minionResume = FindComponentByTypeName(identity.gameObject, "MinionResume");
+            if (minionResume != null && TryBuildPrioritySnapshotFromResume(minionResume, out JObject resumePriority) && resumePriority.Count > 0)
+            {
+                return resumePriority;
+            }
+
             if (minionResume == null)
             {
                 return priority;
@@ -1032,6 +1044,221 @@ public sealed class OniAiController : MonoBehaviour
             }
 
             return priority;
+        }
+
+        private static bool TryBuildPrioritySnapshotFromChoreConsumer(Component choreConsumer, out JObject priorities)
+        {
+            priorities = new JObject();
+            if (choreConsumer == null)
+            {
+                return false;
+            }
+
+            if (!TryGetChoreGroupResources(out IEnumerable resources))
+            {
+                return false;
+            }
+
+            MethodInfo getPersonalPriority = ResolvePersonalPriorityGetter(choreConsumer);
+            if (getPersonalPriority == null)
+            {
+                return false;
+            }
+
+            bool any = false;
+            foreach (object group in resources)
+            {
+                if (group == null)
+                {
+                    continue;
+                }
+
+                object idValue = GetMemberValue(group, "Id");
+                if (idValue == null)
+                {
+                    continue;
+                }
+
+                string choreGroupId = idValue.ToString();
+                if (string.IsNullOrWhiteSpace(choreGroupId))
+                {
+                    continue;
+                }
+
+                int? priorityValue = TryReadPersonalPriorityValue(choreConsumer, getPersonalPriority, group);
+                if (!priorityValue.HasValue)
+                {
+                    continue;
+                }
+
+                priorities[choreGroupId] = Mathf.Clamp(priorityValue.Value, 0, 5);
+                any = true;
+            }
+
+            return any;
+        }
+
+        private static bool TryBuildPrioritySnapshotFromResume(Component minionResume, out JObject priorities)
+        {
+            priorities = new JObject();
+            if (minionResume == null)
+            {
+                return false;
+            }
+
+            if (!TryGetChoreGroupResources(out IEnumerable resources))
+            {
+                return false;
+            }
+
+            MethodInfo getPriority = ResolvePersonalPriorityGetter(minionResume);
+            if (getPriority == null)
+            {
+                return false;
+            }
+
+            bool any = false;
+            foreach (object group in resources)
+            {
+                if (group == null)
+                {
+                    continue;
+                }
+
+                object idValue = GetMemberValue(group, "Id");
+                if (idValue == null)
+                {
+                    continue;
+                }
+
+                string choreGroupId = idValue.ToString();
+                if (string.IsNullOrWhiteSpace(choreGroupId))
+                {
+                    continue;
+                }
+
+                int? priorityValue = TryReadPersonalPriorityValue(minionResume, getPriority, group);
+                if (!priorityValue.HasValue)
+                {
+                    continue;
+                }
+
+                priorities[choreGroupId] = Mathf.Clamp(priorityValue.Value, 0, 5);
+                any = true;
+            }
+
+            return any;
+        }
+
+        private static bool TryGetChoreGroupResources(out IEnumerable resources)
+        {
+            resources = null;
+
+            Type dbType = FindRuntimeType("Db");
+            if (dbType == null)
+            {
+                return false;
+            }
+
+            MethodInfo getMethod = dbType.GetMethod("Get", BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);
+            if (getMethod == null)
+            {
+                return false;
+            }
+
+            object db;
+            try
+            {
+                db = getMethod.Invoke(null, null);
+            }
+            catch
+            {
+                return false;
+            }
+
+            object groups = GetMemberValue(db, "ChoreGroups");
+            if (!(GetMemberValue(groups, "resources") is IEnumerable groupResources))
+            {
+                return false;
+            }
+
+            resources = groupResources;
+            return true;
+        }
+
+        private static MethodInfo ResolvePersonalPriorityGetter(object target)
+        {
+            if (target == null)
+            {
+                return null;
+            }
+
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            MethodInfo[] methods = target.GetType().GetMethods(flags);
+
+            MethodInfo exact = methods.FirstOrDefault(method =>
+                string.Equals(method.Name, "GetPersonalPriority", StringComparison.Ordinal)
+                && method.GetParameters().Length >= 1
+                && method.GetParameters().Length <= 2);
+
+            if (exact != null)
+            {
+                return exact;
+            }
+
+            MethodInfo fuzzy = methods
+                .Where(method => method.GetParameters().Length >= 1 && method.GetParameters().Length <= 2)
+                .FirstOrDefault(method => method.Name.IndexOf("Priority", StringComparison.OrdinalIgnoreCase) >= 0
+                    && method.Name.IndexOf("Get", StringComparison.OrdinalIgnoreCase) >= 0);
+
+            return fuzzy;
+        }
+
+        private static int? TryReadPersonalPriorityValue(object target, MethodInfo getPersonalPriority, object choreGroup)
+        {
+            if (target == null || getPersonalPriority == null || choreGroup == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                ParameterInfo[] parameters = getPersonalPriority.GetParameters();
+                object[] args;
+                if (parameters.Length == 1)
+                {
+                    args = new[] { choreGroup };
+                }
+                else if (parameters.Length == 2)
+                {
+                    args = new[] { choreGroup, (object)false };
+                }
+                else
+                {
+                    return null;
+                }
+
+                object raw = getPersonalPriority.Invoke(target, args);
+                if (raw == null)
+                {
+                    return null;
+                }
+
+                if (raw is int direct)
+                {
+                    return direct;
+                }
+
+                if (int.TryParse(raw.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed))
+                {
+                    return parsed;
+                }
+            }
+            catch
+            {
+            }
+
+            return null;
         }
 
         private static JArray BuildDuplicantSkillsArray(MonoBehaviour identity)
@@ -1315,10 +1542,10 @@ public sealed class OniAiController : MonoBehaviour
 
         private string ApplyDigAction(JObject parameters)
         {
-            List<int> cells = ResolveCellsFromParameters(parameters, allowDuplicantFallback: true);
+            List<int> cells = ResolveCellsFromParameters(parameters);
             if (cells.Count == 0)
             {
-                throw new InvalidOperationException("dig requires params.cells");
+                throw new InvalidOperationException("dig requires explicit params.points or params.x/params.y");
             }
 
             if (!GetRuntimeToolInstance("DigTool", out object digTool))
@@ -1361,10 +1588,10 @@ public sealed class OniAiController : MonoBehaviour
 
         private string ApplyDeconstructAction(JObject parameters)
         {
-            List<int> cells = ResolveCellsFromParameters(parameters, allowDuplicantFallback: true);
+            List<int> cells = ResolveCellsFromParameters(parameters);
             if (cells.Count == 0)
             {
-                throw new InvalidOperationException("deconstruct requires params.cells");
+                throw new InvalidOperationException("deconstruct requires explicit params.points or params.x/params.y");
             }
 
             if (!GetRuntimeToolInstance("DeconstructTool", out object deconstructTool))
@@ -1394,10 +1621,10 @@ public sealed class OniAiController : MonoBehaviour
         {
             string buildingId = RequireNonEmptyString(parameters, "building_id", "build requires non-empty building_id");
 
-            List<int> cells = ResolveCellsFromParameters(parameters, allowDuplicantFallback: false);
+            List<int> cells = ResolveCellsFromParameters(parameters);
             if (cells.Count == 0)
             {
-                throw new InvalidOperationException("build requires params.cells");
+                throw new InvalidOperationException("build requires explicit params.points or params.x/params.y");
             }
 
             if (!ResolveBuildingDef(buildingId, out object buildingDef))
@@ -1519,7 +1746,7 @@ public sealed class OniAiController : MonoBehaviour
             return applied;
         }
 
-        private static List<int> ResolveCellsFromParameters(JObject parameters, bool allowDuplicantFallback)
+        private static List<int> ResolveCellsFromParameters(JObject parameters)
         {
             var result = new List<int>();
 
@@ -1540,20 +1767,6 @@ public sealed class OniAiController : MonoBehaviour
                 && parameters["y"].Type == JTokenType.Integer)
             {
                 AppendCellFromXY(parameters["x"].Value<int>(), parameters["y"].Value<int>(), result);
-            }
-
-            if (result.Count == 0 && allowDuplicantFallback)
-            {
-                int radius = 2;
-                if (parameters["surrounding_radius"] != null && parameters["surrounding_radius"].Type == JTokenType.Integer)
-                {
-                    radius = Mathf.Clamp(parameters["surrounding_radius"].Value<int>(), 1, 12);
-                }
-
-                foreach ((int x, int y) in BuildSurroundingPointsFromDuplicants(radius))
-                {
-                    AppendCellFromXY(x, y, result);
-                }
             }
 
             return result.Distinct().ToList();
@@ -1591,29 +1804,6 @@ public sealed class OniAiController : MonoBehaviour
             {
                 output.Add(cell);
             }
-        }
-
-        private static List<(int x, int y)> BuildSurroundingPointsFromDuplicants(int radius)
-        {
-            var points = new List<(int x, int y)>();
-            var duplicantCoordinates = CollectDuplicantCoordinates();
-            if (duplicantCoordinates.Count == 0)
-            {
-                return points;
-            }
-
-            int centerX = Mathf.RoundToInt(duplicantCoordinates.Average(entry => (float)entry.X));
-            int centerY = Mathf.RoundToInt(duplicantCoordinates.Average(entry => (float)entry.Y));
-
-            for (int y = centerY - radius; y <= centerY + radius; y++)
-            {
-                for (int x = centerX - radius; x <= centerX + radius; x++)
-                {
-                    points.Add((x, y));
-                }
-            }
-
-            return points;
         }
 
         private static string RequireNonEmptyString(JObject parameters, string key, string errorMessage)
@@ -1656,6 +1846,11 @@ public sealed class OniAiController : MonoBehaviour
                     object value = method.Invoke(null, new object[] { x, y });
                     if (value is int cellValue)
                     {
+                        if (!TryIsValidGridCell(gridType, cellValue))
+                        {
+                            return false;
+                        }
+
                         cell = cellValue;
                         return true;
                     }
@@ -1666,6 +1861,40 @@ public sealed class OniAiController : MonoBehaviour
             }
 
             return false;
+        }
+
+        private static bool TryIsValidGridCell(Type gridType, int cell)
+        {
+            if (gridType == null || cell < 0)
+            {
+                return false;
+            }
+
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+
+            MethodInfo isValidMethod = gridType.GetMethod("IsValidCell", flags, null, new[] { typeof(int) }, null);
+            if (isValidMethod != null)
+            {
+                try
+                {
+                    object result = isValidMethod.Invoke(null, new object[] { cell });
+                    if (result is bool isValid)
+                    {
+                        return isValid;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            object cellCountValue = GetStaticMemberValue(gridType, "CellCount");
+            if (cellCountValue is int cellCount)
+            {
+                return cell >= 0 && cell < cellCount;
+            }
+
+            return cell >= 0;
         }
 
         private static bool ResolveBuildingDef(string id, out object buildingDef)

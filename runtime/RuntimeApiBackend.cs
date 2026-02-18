@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
@@ -170,6 +171,8 @@ namespace OniAiAssistantRuntime
             }
 
             int accepted = 0;
+            int failed = 0;
+            var results = new JArray();
             foreach (JToken token in updates)
             {
                 if (!(token is JObject update))
@@ -181,6 +184,17 @@ namespace OniAiAssistantRuntime
                 if (values == null || values.Count == 0)
                 {
                     continue;
+                }
+
+                var result = new JObject();
+                if (update["duplicant_id"]?.Type == JTokenType.String)
+                {
+                    result["duplicant_id"] = update["duplicant_id"].Value<string>();
+                }
+
+                if (update["duplicant_name"]?.Type == JTokenType.String)
+                {
+                    result["duplicant_name"] = update["duplicant_name"].Value<string>();
                 }
 
                 var parameters = new JObject
@@ -197,15 +211,140 @@ namespace OniAiAssistantRuntime
                     }
                 }
 
-                InvokeStatic<string>("ApplyDuplicantPriorityUpdate", parameters);
+                if (update["duplicant_name"]?.Type == JTokenType.String)
+                {
+                    string duplicantName = update["duplicant_name"].Value<string>()?.Trim();
+                    if (!string.IsNullOrEmpty(duplicantName))
+                    {
+                        parameters["duplicant_name"] = duplicantName;
+                    }
+                }
+
+                try
+                {
+                    InvokeStatic<string>("ApplyDuplicantPriorityUpdate", parameters);
+                }
+                catch (TargetInvocationException exception) when (exception.InnerException is InvalidOperationException inner)
+                {
+                    failed++;
+                    result["status"] = "failed";
+                    result["error"] = inner.Message;
+                    results.Add(result);
+                    continue;
+                }
+                catch (InvalidOperationException exception)
+                {
+                    failed++;
+                    result["status"] = "failed";
+                    result["error"] = exception.Message;
+                    results.Add(result);
+                    continue;
+                }
+
+                JArray snapshot = InvokeStatic<JArray>("BuildPrioritiesSnapshot") ?? new JArray();
+                if (!TryFindPriorityEntry(snapshot, parameters, out JObject currentValues))
+                {
+                    failed++;
+                    result["status"] = "failed";
+                    result["error"] = "priority_snapshot_missing";
+                    results.Add(result);
+                    continue;
+                }
+
+                if (!AreRequestedPriorityValuesApplied(values, currentValues))
+                {
+                    failed++;
+                    result["status"] = "failed";
+                    result["error"] = "priority_update_not_observed";
+                    result["requested"] = values.DeepClone();
+                    result["observed"] = currentValues.DeepClone();
+                    results.Add(result);
+                    continue;
+                }
+
                 accepted++;
+                result["status"] = "applied";
+                results.Add(result);
             }
 
             return new JObject
             {
                 ["accepted"] = accepted,
-                ["status"] = "applied"
+                ["failed"] = failed,
+                ["status"] = failed == 0 ? "applied" : (accepted > 0 ? "partial" : "failed"),
+                ["results"] = results
             };
+        }
+
+        private static bool TryFindPriorityEntry(JArray snapshot, JObject parameters, out JObject currentValues)
+        {
+            currentValues = null;
+            if (snapshot == null)
+            {
+                return false;
+            }
+
+            string targetId = parameters["duplicant_id"]?.Value<string>();
+            string targetName = parameters["duplicant_name"]?.Value<string>();
+
+            foreach (JToken token in snapshot)
+            {
+                if (!(token is JObject item))
+                {
+                    continue;
+                }
+
+                string snapshotId = item["duplicant_id"]?.Value<string>();
+                string snapshotName = item["duplicant_name"]?.Value<string>();
+
+                bool idMatch = !string.IsNullOrWhiteSpace(targetId) && string.Equals(snapshotId, targetId, StringComparison.Ordinal);
+                bool nameMatch = !string.IsNullOrWhiteSpace(targetName) && string.Equals(snapshotName, targetName, StringComparison.Ordinal);
+                if (!idMatch && !nameMatch)
+                {
+                    continue;
+                }
+
+                currentValues = item["values"] as JObject ?? new JObject();
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool AreRequestedPriorityValuesApplied(JObject requested, JObject observed)
+        {
+            if (requested == null)
+            {
+                return false;
+            }
+
+            var observedMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (observed != null)
+            {
+                foreach (JProperty property in observed.Properties())
+                {
+                    if (property.Value.Type == JTokenType.Integer)
+                    {
+                        observedMap[property.Name] = Mathf.Clamp(property.Value.Value<int>(), 0, 5);
+                    }
+                }
+            }
+
+            foreach (JProperty property in requested.Properties())
+            {
+                if (property.Value.Type != JTokenType.Integer)
+                {
+                    continue;
+                }
+
+                int expected = Mathf.Clamp(property.Value.Value<int>(), 0, 5);
+                if (!observedMap.TryGetValue(property.Name, out int actual) || actual != expected)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         public JObject BuildState(OniAiController controller)

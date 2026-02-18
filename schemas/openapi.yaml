@@ -515,13 +515,20 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [accepted, status]
+                required: [accepted, failed, status, results]
                 properties:
                   accepted:
                     type: integer
+                  failed:
+                    type: integer
                   status:
                     type: string
-                    enum: [applied]
+                    enum: [applied, partial, failed]
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
         '400':
           description: Invalid JSON or invalid priorities payload
           content:
