@@ -611,7 +611,7 @@ public sealed class OniAiController : MonoBehaviour
             }
 
             speedControl.Unpause(false);
-            speedControl.SetSpeed(Mathf.Clamp(speed, 1, 3));
+            speedControl.SetSpeed(ConvertApiSpeedToRuntime(Mathf.Clamp(speed, 1, 3)));
         }
 
         private string BuildApiBaseUrl()
@@ -3191,9 +3191,70 @@ public sealed class OniAiController : MonoBehaviour
             }
 
             paused = speedControl.IsPaused;
-            speed = Mathf.Clamp(speedControl.GetSpeed(), 1, 3);
+            speed = ConvertRuntimeSpeedToApi(speedControl.GetSpeed());
             return true;
         }
+
+        private static JObject ApplyLiveSpeedPayload(int requestedSpeed)
+        {
+            var speedControl = SpeedControlScreen.Instance;
+            if (speedControl == null)
+            {
+                return null;
+            }
+
+            int requested = Mathf.Clamp(requestedSpeed, 1, 3);
+            int runtimeRequested = ConvertApiSpeedToRuntime(requested);
+            bool wasPaused = speedControl.IsPaused;
+
+            try
+            {
+                speedControl.SetSpeed(runtimeRequested);
+            }
+            catch
+            {
+            }
+
+            int observed = ConvertRuntimeSpeedToApi(speedControl.GetSpeed());
+            if (observed != requested)
+            {
+                try
+                {
+                    speedControl.Unpause(false);
+                    speedControl.SetSpeed(runtimeRequested);
+                    if (wasPaused)
+                    {
+                        speedControl.Pause(false, false);
+                    }
+                }
+                catch
+                {
+                }
+
+                observed = ConvertRuntimeSpeedToApi(speedControl.GetSpeed());
+            }
+
+            return new JObject
+            {
+                ["status"] = observed == requested ? "applied" : "rejected",
+                ["requested_speed"] = requested,
+                ["speed"] = observed,
+                ["paused"] = speedControl.IsPaused
+            };
+        }
+
+        private static int ConvertApiSpeedToRuntime(int apiSpeed)
+        {
+            int normalized = Mathf.Clamp(apiSpeed, 1, 3);
+            return normalized - 1;
+        }
+
+        private static int ConvertRuntimeSpeedToApi(int runtimeSpeed)
+        {
+            int normalized = Mathf.Clamp(runtimeSpeed, 0, 2);
+            return normalized + 1;
+        }
+
         private sealed class CameraRequest
         {
             [JsonProperty("x")]

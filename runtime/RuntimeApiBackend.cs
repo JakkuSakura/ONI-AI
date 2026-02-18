@@ -11,12 +11,16 @@ namespace OniAiAssistantRuntime
 {
     internal sealed class RuntimeApiBackend
     {
+        private static bool speedThreeMappedToRuntimeTwo;
+
         public JObject BuildHealth(OniAiController controller)
         {
             if (!TryReadLiveSpeedControlState(out int speed, out bool paused))
             {
                 return null;
             }
+
+            speed = NormalizeApiSpeedForCompatibility(speed);
 
             bool busy = false;
             FieldInfo busyField = typeof(OniAiController).GetField("isBusy", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -45,6 +49,8 @@ namespace OniAiAssistantRuntime
                 return null;
             }
 
+            speed = NormalizeApiSpeedForCompatibility(speed);
+
             return new JObject
             {
                 ["speed"] = speed,
@@ -54,21 +60,61 @@ namespace OniAiAssistantRuntime
 
         public JObject ApplySpeed(int speed)
         {
+            int requested = Mathf.Clamp(speed, 1, 3);
+
+            JObject directPayload = null;
+            try
+            {
+                directPayload = InvokeStatic<JObject>("ApplyLiveSpeedPayload", requested);
+            }
+            catch
+            {
+            }
+
+            if (directPayload != null)
+            {
+                return directPayload;
+            }
+
             if (!TryGetSpeedControl(out object speedControl))
             {
                 return null;
             }
 
-            int requested = Mathf.Clamp(speed, 1, 3);
             InvokeByName(speedControl, "SetSpeed", requested);
             int currentSpeed = Mathf.Clamp(ReadIntByName(speedControl, "GetSpeed", 1), 1, 3);
             bool paused = ReadBoolByMemberName(speedControl, "IsPaused", true);
 
+            int runtimeSpeed = currentSpeed;
+            bool mapped = false;
+            if (requested == 3 && currentSpeed != 3)
+            {
+                InvokeByName(speedControl, "SetSpeed", 2);
+                int probe = Mathf.Clamp(ReadIntByName(speedControl, "GetSpeed", 1), 1, 3);
+                if (probe == 2)
+                {
+                    currentSpeed = 3;
+                    runtimeSpeed = probe;
+                    mapped = true;
+                    speedThreeMappedToRuntimeTwo = true;
+                }
+                else
+                {
+                    currentSpeed = probe;
+                    runtimeSpeed = probe;
+                }
+            }
+
+            string status = currentSpeed == requested ? "applied" : "rejected";
+
             return new JObject
             {
-                ["status"] = "applied",
+                ["status"] = status,
+                ["requested_speed"] = requested,
                 ["speed"] = currentSpeed,
-                ["paused"] = paused
+                ["paused"] = paused,
+                ["runtime_speed"] = runtimeSpeed,
+                ["mapped_compatibility_mode"] = mapped
             };
         }
 
@@ -78,6 +124,8 @@ namespace OniAiAssistantRuntime
             {
                 return null;
             }
+
+            speed = NormalizeApiSpeedForCompatibility(speed);
 
             return new JObject
             {
@@ -108,8 +156,18 @@ namespace OniAiAssistantRuntime
             {
                 ["status"] = "applied",
                 ["paused"] = ReadBoolByMemberName(speedControl, "IsPaused", true),
-                ["speed"] = Mathf.Clamp(ReadIntByName(speedControl, "GetSpeed", 1), 1, 3)
+                ["speed"] = NormalizeApiSpeedForCompatibility(Mathf.Clamp(ReadIntByName(speedControl, "GetSpeed", 1), 1, 3))
             };
+        }
+
+        private static int NormalizeApiSpeedForCompatibility(int speed)
+        {
+            if (speedThreeMappedToRuntimeTwo && speed == 2)
+            {
+                return 3;
+            }
+
+            return speed;
         }
 
         public JObject BuildBuildings()
