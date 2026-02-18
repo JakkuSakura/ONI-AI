@@ -14,8 +14,16 @@ if [ ! -f "$OUT_DIR/OniAiAssistant.dll" ]; then
   "$ROOT_DIR/scripts/build.sh"
 fi
 
-RUNTIME_SOURCES=("$RUNTIME_DIR"/*.cs)
-if [ ${#RUNTIME_SOURCES[@]} -eq 0 ]; then
+runtime_sources=()
+for source in "$RUNTIME_DIR"/*.cs; do
+  if [ "$(basename "$source")" = "OniAiController.cs" ]; then
+    continue
+  fi
+
+  runtime_sources+=("$source")
+done
+
+if [ ${#runtime_sources[@]} -eq 0 ]; then
   echo "No runtime C# sources found under $RUNTIME_DIR" >&2
   exit 1
 fi
@@ -26,7 +34,8 @@ fi
   -out:"$OUT_DIR/OniAiRuntime.dll" \
   -r:"$OUT_DIR/OniAiAssistant.dll" \
   -r:"$MANAGED_DIR/netstandard.dll" \
+  -r:"$MANAGED_DIR/Newtonsoft.Json.dll" \
   -r:"$MANAGED_DIR/UnityEngine.CoreModule.dll" \
-  "${RUNTIME_SOURCES[@]}"
+  "${runtime_sources[@]}"
 
 echo "Build output: $OUT_DIR/OniAiRuntime.dll"
