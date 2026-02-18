@@ -8,6 +8,7 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using HarmonyLib;
 using KMod;
 using Newtonsoft.Json;
@@ -1748,10 +1749,7 @@ public sealed class OniAiController : MonoBehaviour
                 return action();
             }
 
-            var signal = new ManualResetEvent(false);
-            T result = default;
-            Exception captured = null;
-            int completionState = 0;
+            var completion = new TaskCompletionSource<T>();
 
             lock (mainThreadDispatchSync)
             {
@@ -1759,54 +1757,21 @@ public sealed class OniAiController : MonoBehaviour
                 {
                     try
                     {
-                        result = action();
+                        completion.TrySetResult(action());
                     }
                     catch (Exception exception)
                     {
-                        captured = exception;
-                    }
-                    finally
-                    {
-                        int previous = Interlocked.CompareExchange(ref completionState, 1, 0);
-                        if (previous == 0)
-                        {
-                            try
-                            {
-                                signal.Set();
-                            }
-                            catch (ObjectDisposedException)
-                            {
-                            }
-                        }
-                        else if (previous == 2)
-                        {
-                            signal.Dispose();
-                        }
+                        completion.TrySetException(exception);
                     }
                 });
             }
 
-            bool completed = signal.WaitOne(3000);
-
-            if (!completed)
+            if (!completion.Task.Wait(3000))
             {
-                int previous = Interlocked.CompareExchange(ref completionState, 2, 0);
-                if (previous == 1)
-                {
-                    signal.Dispose();
-                }
-
                 throw new InvalidOperationException("main_thread_dispatch_timeout");
             }
 
-            signal.Dispose();
-
-            if (captured != null)
-            {
-                throw captured;
-            }
-
-            return result;
+            return completion.Task.GetAwaiter().GetResult();
         }
 
         private void DrainMainThreadDispatchQueue()
